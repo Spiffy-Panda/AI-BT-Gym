@@ -1,0 +1,41 @@
+# Godot
+.godot/
+*.import
+export_presets.cfg
+
+# .NET / C#
+bin/
+obj/
+*.csproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.nupkg
+*.snupkg
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Build
+*.exe
+*.dll
+*.pdb
+*.mdb
+
+# Logs
+*.log
