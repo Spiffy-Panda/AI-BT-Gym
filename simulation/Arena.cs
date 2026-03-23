@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Arena.cs — Arena geometry and surface queries
+// Arena.cs — Arena geometry and boundary enforcement
 // ─────────────────────────────────────────────────────────────────────────────
 
 using Godot;
@@ -12,9 +12,6 @@ public class Arena
     public float Height { get; }
     public Rect2 Bounds { get; }
     public float WallThickness { get; } = 10f;
-
-    // Surfaces that fists can attach to (all walls + ceiling)
-    public float AttachRadius { get; } = 20f;
 
     public Arena(float width = 1200f, float height = 680f)
     {
@@ -42,63 +39,4 @@ public class Arena
     {
         return pos.Y >= Bounds.End.Y - radius - 1f;
     }
-
-    /// <summary>
-    /// Try to find the nearest wall/ceiling surface point for fist attachment.
-    /// Returns true if a surface is within attach radius.
-    /// </summary>
-    public bool TryGetNearestSurface(Vector2 fistPos, out Vector2 surfacePoint)
-    {
-        surfacePoint = fistPos;
-        float bestDist = AttachRadius;
-        bool found = false;
-
-        // Left wall
-        float d = Mathf.Abs(fistPos.X - Bounds.Position.X);
-        if (d < bestDist && fistPos.Y >= Bounds.Position.Y && fistPos.Y <= Bounds.End.Y)
-        {
-            bestDist = d;
-            surfacePoint = new Vector2(Bounds.Position.X, fistPos.Y);
-            found = true;
-        }
-
-        // Right wall
-        d = Mathf.Abs(fistPos.X - Bounds.End.X);
-        if (d < bestDist && fistPos.Y >= Bounds.Position.Y && fistPos.Y <= Bounds.End.Y)
-        {
-            bestDist = d;
-            surfacePoint = new Vector2(Bounds.End.X, fistPos.Y);
-            found = true;
-        }
-
-        // Ceiling
-        d = Mathf.Abs(fistPos.Y - Bounds.Position.Y);
-        if (d < bestDist && fistPos.X >= Bounds.Position.X && fistPos.X <= Bounds.End.X)
-        {
-            bestDist = d;
-            surfacePoint = new Vector2(fistPos.X, Bounds.Position.Y);
-            found = true;
-        }
-
-        // Floor
-        d = Mathf.Abs(fistPos.Y - Bounds.End.Y);
-        if (d < bestDist && fistPos.X >= Bounds.Position.X && fistPos.X <= Bounds.End.X)
-        {
-            bestDist = d;
-            surfacePoint = new Vector2(fistPos.X, Bounds.End.Y);
-            found = true;
-        }
-
-        return found;
-    }
-
-    /// <summary>Check if a position is near a specific wall/ceiling.</summary>
-    public bool IsNearWallLeft(Vector2 pos, float threshold = 60f) =>
-        pos.X - Bounds.Position.X < threshold;
-
-    public bool IsNearWallRight(Vector2 pos, float threshold = 60f) =>
-        Bounds.End.X - pos.X < threshold;
-
-    public bool IsNearCeiling(Vector2 pos, float threshold = 60f) =>
-        pos.Y - Bounds.Position.Y < threshold;
 }

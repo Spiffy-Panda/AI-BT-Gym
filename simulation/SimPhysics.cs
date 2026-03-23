@@ -90,9 +90,14 @@ public static class SimPhysics
         }
     }
 
-    /// <summary>Check if two fists collide. Force both to retract.</summary>
-    public static bool CheckFistCollision(Fist a, Fist b)
+    /// <summary>Check if two fists collide. Force both to retract.
+    /// Skipped when fighters are within 3 body radii ("inside the guard").</summary>
+    public static bool CheckFistCollision(Fist a, Fist b, float fighterDistance, float bodyRadius)
     {
+        // Inside the guard — fists pass through each other
+        if (fighterDistance < bodyRadius * 3f)
+            return false;
+
         if (a.ChainState == FistChainState.Retracted || b.ChainState == FistChainState.Retracted)
             return false;
 
@@ -126,16 +131,5 @@ public static class SimPhysics
             return true;
         }
         return false;
-    }
-
-    /// <summary>Auto-attach fist to surface when extending near a wall.</summary>
-    public static void CheckFistSurfaceAttach(Fist fist, Arena arena)
-    {
-        if (fist.ChainState != FistChainState.Extending || fist.IsAttachedToWorld) return;
-
-        if (arena.TryGetNearestSurface(fist.Position, out Vector2 surfacePoint))
-        {
-            fist.Attach(surfacePoint);
-        }
     }
 }

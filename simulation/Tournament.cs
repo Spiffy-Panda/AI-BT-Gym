@@ -10,32 +10,38 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using AiBtGym.BehaviorTree;
 
 namespace AiBtGym.Simulation;
 
 /// <summary>A fighter entry in a tournament: name, BT roots, and optional C# source.</summary>
-public record TournamentEntry(string Name, List<BtNode> Roots, int BtVersion = 0, string? CSharpSource = null);
+public record TournamentEntry(string Name, List<BtNode> Roots, int BtVersion = 0, string? CSharpSource = null, string? Color = null);
 
 public static class Tournament
 {
-    /// <summary>Create tournament entries from parallel name/tree arrays (e.g. SeedTrees).</summary>
-    public static List<TournamentEntry> EntriesFromSeed(string[] names, List<BtNode>[] trees)
+    /// <summary>Create tournament entries from parallel name/tree/color arrays (e.g. SeedTrees).</summary>
+    public static List<TournamentEntry> EntriesFromSeed(string[] names, List<BtNode>[] trees, string[]? hexColors = null)
     {
         var entries = new List<TournamentEntry>();
         for (int i = 0; i < names.Length; i++)
-            entries.Add(new TournamentEntry(names[i], trees[i]));
+            entries.Add(new TournamentEntry(names[i], trees[i], Color: hexColors != null && i < hexColors.Length ? hexColors[i] : null));
         return entries;
     }
 
     /// <summary>
     /// Run a full round-robin tournament and write all output to disk.
+    /// Each matchup is best-of-7 with randomized starting positions.
     /// Returns the generation summary.
     /// </summary>
     public static GenerationSummary RunGeneration(
-        List<TournamentEntry> entries, int generation, string outputPath)
+        List<TournamentEntry> entries, int generation, string outputPath,
+        int bestOf = 7, int? masterSeed = null)
     {
+        // Generate a master seed if not provided, and derive per-match seeds from it
+        int seed = masterSeed ?? Environment.TickCount;
+        var seedRng = new Random(seed);
         int n = entries.Count;
         string genDir = Path.Combine(outputPath, $"gen_{generation:D3}");
 
@@ -87,90 +93,100 @@ public static class Tournament
         }
 
         int matchNum = 0;
-        int totalMatches = n * (n - 1) / 2;
+        int totalPairings = n * (n - 1) / 2;
+        int totalMatches = totalPairings * bestOf;
         int knockoutCount = 0;
         int drawCount = 0;
         long totalDurationTicks = 0;
+        int matchesPlayed = 0;
 
         for (int i = 0; i < n; i++)
         {
             for (int j = i + 1; j < n; j++)
             {
                 matchNum++;
-                string matchId = $"gen_{generation:D3}_match_{matchNum:D3}";
 
-                // Create and run match
-                var arena = new Arena();
-                var match = new Match(arena, entries[i].Roots, entries[j].Roots);
-                var recorder = new MatchRecorder(
-                    [entries[i].Name, entries[j].Name],
-                    generation,
-                    [entries[i].BtVersion, entries[j].BtVersion],
-                    matchId);
-                match.Recorder = recorder;
-
-                while (!match.IsOver)
-                    match.Step();
-
-                totalDurationTicks += match.Tick;
-
-                // Build battle logs from both perspectives
-                var logI = recorder.BuildBattleLog(0);
-                var logJ = recorder.BuildBattleLog(1);
-                allBattleLogs[i].Add(logI);
-                allBattleLogs[j].Add(logJ);
-
-                // Write battle log files
-                string fileNameI = $"match_{matchNum:D3}_vs_{fighterIds[j]}.json";
-                string fileNameJ = $"match_{matchNum:D3}_vs_{fighterIds[i]}.json";
-                WriteBattleLog(Path.Combine(fighterDirs[i], "battles", fileNameI), logI);
-                WriteBattleLog(Path.Combine(fighterDirs[j], "battles", fileNameJ), logJ);
-
-                // Update records
-                float scoreI;
-                if (match.WinnerIndex == 0)
+                for (int game = 0; game < bestOf; game++)
                 {
-                    wins[i]++; losses[j]++;
-                    scoreI = 1f;
-                    bool isKo = match.Fighter1.Health <= 0;
-                    if (isKo) { knockouts[i]++; knockoutCount++; }
-                    else { timeoutsWon[i]++; timeoutsLost[j]++; }
+                    int matchSeed = seedRng.Next();
+                    string matchId = $"gen_{generation:D3}_match_{matchNum:D3}_g{game + 1}";
+
+                    // Create and run match with randomized starting positions
+                    var arena = new Arena();
+                    var match = new Match(arena, entries[i].Roots, entries[j].Roots, seed: matchSeed);
+                    var recorder = new MatchRecorder(
+                        [entries[i].Name, entries[j].Name],
+                        generation,
+                        [entries[i].BtVersion, entries[j].BtVersion],
+                        matchId,
+                        [entries[i].Color, entries[j].Color]);
+                    match.Recorder = recorder;
+
+                    while (!match.IsOver)
+                        match.Step();
+
+                    totalDurationTicks += match.Tick;
+                    matchesPlayed++;
+
+                    // Build replay data + battle logs from both perspectives
+                    var replay = recorder.BuildReplayData(entries[i].Roots, entries[j].Roots, arena);
+                    var logI = recorder.BuildBattleLog(0) with { Replay = replay };
+                    var logJ = recorder.BuildBattleLog(1) with { Replay = replay };
+                    allBattleLogs[i].Add(logI);
+                    allBattleLogs[j].Add(logJ);
+
+                    // Write battle log files
+                    string fileNameI = $"match_{matchNum:D3}_g{game + 1}_vs_{fighterIds[j]}.json";
+                    string fileNameJ = $"match_{matchNum:D3}_g{game + 1}_vs_{fighterIds[i]}.json";
+                    WriteBattleLog(Path.Combine(fighterDirs[i], "battles", fileNameI), logI);
+                    WriteBattleLog(Path.Combine(fighterDirs[j], "battles", fileNameJ), logJ);
+
+                    // Update records
+                    float scoreI;
+                    if (match.WinnerIndex == 0)
+                    {
+                        wins[i]++; losses[j]++;
+                        scoreI = 1f;
+                        bool isKo = match.Fighter1.Health <= 0;
+                        if (isKo) { knockouts[i]++; knockoutCount++; }
+                        else { timeoutsWon[i]++; timeoutsLost[j]++; }
+                    }
+                    else if (match.WinnerIndex == 1)
+                    {
+                        wins[j]++; losses[i]++;
+                        scoreI = 0f;
+                        bool isKo = match.Fighter0.Health <= 0;
+                        if (isKo) { knockouts[j]++; knockoutCount++; }
+                        else { timeoutsWon[j]++; timeoutsLost[i]++; }
+                    }
+                    else
+                    {
+                        draws[i]++; draws[j]++;
+                        scoreI = 0.5f;
+                        drawCount++;
+                    }
+
+                    // Update ELO per game
+                    var (newI, newJ) = EloCalculator.Calculate(elos[i], elos[j], scoreI);
+                    elos[i] = newI;
+                    elos[j] = newJ;
+
+                    // Matchup results
+                    MatchResult resI = scoreI == 1f ? MatchResult.Win : scoreI == 0f ? MatchResult.Loss : MatchResult.Draw;
+                    MatchResult resJ = scoreI == 0f ? MatchResult.Win : scoreI == 1f ? MatchResult.Loss : MatchResult.Draw;
+                    matchupResults[i].Add(new MatchupResult
+                    {
+                        Opponent = $"{fighterIds[j]}_{entries[j].Name}",
+                        Result = resI,
+                        MatchFile = fileNameI
+                    });
+                    matchupResults[j].Add(new MatchupResult
+                    {
+                        Opponent = $"{fighterIds[i]}_{entries[i].Name}",
+                        Result = resJ,
+                        MatchFile = fileNameJ
+                    });
                 }
-                else if (match.WinnerIndex == 1)
-                {
-                    wins[j]++; losses[i]++;
-                    scoreI = 0f;
-                    bool isKo = match.Fighter0.Health <= 0;
-                    if (isKo) { knockouts[j]++; knockoutCount++; }
-                    else { timeoutsWon[j]++; timeoutsLost[i]++; }
-                }
-                else
-                {
-                    draws[i]++; draws[j]++;
-                    scoreI = 0.5f;
-                    drawCount++;
-                }
-
-                // Update ELO
-                var (newI, newJ) = EloCalculator.Calculate(elos[i], elos[j], scoreI);
-                elos[i] = newI;
-                elos[j] = newJ;
-
-                // Matchup results
-                MatchResult resI = scoreI == 1f ? MatchResult.Win : scoreI == 0f ? MatchResult.Loss : MatchResult.Draw;
-                MatchResult resJ = scoreI == 0f ? MatchResult.Win : scoreI == 1f ? MatchResult.Loss : MatchResult.Draw;
-                matchupResults[i].Add(new MatchupResult
-                {
-                    Opponent = $"{fighterIds[j]}_{entries[j].Name}",
-                    Result = resI,
-                    MatchFile = fileNameI
-                });
-                matchupResults[j].Add(new MatchupResult
-                {
-                    Opponent = $"{fighterIds[i]}_{entries[i].Name}",
-                    Result = resJ,
-                    MatchFile = fileNameJ
-                });
             }
         }
 
@@ -184,6 +200,7 @@ public static class Tournament
             {
                 FighterId = fighterIds[i],
                 Name = entries[i].Name,
+                Color = entries[i].Color,
                 Generation = generation,
                 BtVersion = entries[i].BtVersion,
                 Record = new RecordData
@@ -221,24 +238,49 @@ public static class Tournament
                 Rank = rank + 1,
                 FighterId = fighterIds[idx],
                 Name = entries[idx].Name,
+                Color = entries[idx].Color,
                 Elo = elos[idx],
                 Record = $"{wins[idx]}-{losses[idx]}-{draws[idx]}"
             })
             .ToList();
+
+        // Hash the DLL that contains the BT code
+        string dllHash = "";
+        try
+        {
+            // Try Assembly.Location first, fall back to scanning known build output path
+            var asm = typeof(Tournament).Assembly;
+            string? dllPath = asm.Location;
+            if (string.IsNullOrEmpty(dllPath) || !File.Exists(dllPath))
+            {
+                // Godot mono loads assemblies without setting Location — find the DLL on disk
+                string projectDir = global::Godot.ProjectSettings.GlobalizePath("res://");
+                dllPath = Path.Combine(projectDir, ".godot", "mono", "temp", "bin", "Debug", "AI-BT-Gym.dll");
+            }
+            if (File.Exists(dllPath))
+            {
+                var bytes = File.ReadAllBytes(dllPath);
+                dllHash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            }
+        }
+        catch { /* non-critical — leave hash empty */ }
 
         var summary = new GenerationSummary
         {
             Generation = generation,
             Timestamp = DateTime.UtcNow.ToString("o"),
             FighterCount = n,
-            TotalMatches = totalMatches,
+            TotalMatches = matchesPlayed,
             TournamentFormat = "round_robin",
+            BestOf = bestOf,
+            Seed = seed,
+            DllHash = dllHash,
             Leaderboard = leaderboard,
             MetaStats = new MetaStats
             {
-                AvgMatchDurationTicks = totalMatches > 0 ? (float)totalDurationTicks / totalMatches : 0,
-                KnockoutRate = totalMatches > 0 ? (float)knockoutCount / totalMatches : 0,
-                DrawRate = totalMatches > 0 ? (float)drawCount / totalMatches : 0
+                AvgMatchDurationTicks = matchesPlayed > 0 ? (float)totalDurationTicks / matchesPlayed : 0,
+                KnockoutRate = matchesPlayed > 0 ? (float)knockoutCount / matchesPlayed : 0,
+                DrawRate = matchesPlayed > 0 ? (float)drawCount / matchesPlayed : 0
             }
         };
 

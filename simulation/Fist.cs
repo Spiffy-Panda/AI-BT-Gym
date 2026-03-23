@@ -1,8 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Fist.cs — Fist state machine and chain data
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// Fists anchor mid-air when locked — no surface contact needed.
+// Lock during Extending creates an immovable anchor at the fist's current
+// position. The fighter can then swing (pendulum) or retract (pull toward).
 
-using System;
 using Godot;
 
 namespace AiBtGym.Simulation;
@@ -35,11 +38,13 @@ public class Fist
         return true;
     }
 
-    /// <summary>Lock the chain at current length.</summary>
+    /// <summary>Lock the chain at current length. Creates mid-air anchor at fist position.</summary>
     public bool Lock()
     {
         if (ChainState != FistChainState.Extending) return false;
         ChainState = FistChainState.Locked;
+        IsAttachedToWorld = true;
+        AnchorPoint = Position;
         return true;
     }
 
@@ -51,35 +56,19 @@ public class Fist
         return true;
     }
 
-    /// <summary>Force retract (e.g. from collision).</summary>
+    /// <summary>Force retract (e.g. from collision). Also detaches.</summary>
     public void ForceRetract()
     {
         if (ChainState == FistChainState.Retracted) return;
         ChainState = FistChainState.Retracting;
+        IsAttachedToWorld = false;
     }
 
-    /// <summary>Attach fist to a world surface point.</summary>
-    public bool Attach(Vector2 surfacePoint)
-    {
-        if (ChainState == FistChainState.Retracted || ChainState == FistChainState.Retracting) return false;
-        IsAttachedToWorld = true;
-        AnchorPoint = surfacePoint;
-        Position = surfacePoint;
-        return true;
-    }
-
-    /// <summary>Detach fist from world.</summary>
+    /// <summary>Detach fist from world anchor.</summary>
     public void Detach()
     {
         IsAttachedToWorld = false;
     }
-
-    /// <summary>
-    /// Optional surface check callback set by the simulation.
-    /// Called during Tick when extending, after position update but before auto-retract.
-    /// Returns (attached, surfacePoint).
-    /// </summary>
-    public Func<Vector2, (bool hit, Vector2 point)>? SurfaceCheck { get; set; }
 
     /// <summary>Advance fist state each tick.</summary>
     public void Tick(float dt, Vector2 ownerPos)
@@ -93,40 +82,28 @@ public class Fist
                 break;
 
             case FistChainState.Extending:
-                if (!IsAttachedToWorld)
-                {
-                    ChainLength += ExtendSpeed * dt;
-                    if (ChainLength > MaxChainLength)
-                        ChainLength = MaxChainLength;
+                ChainLength += ExtendSpeed * dt;
+                if (ChainLength > MaxChainLength)
+                    ChainLength = MaxChainLength;
 
-                    Position = ownerPos + LaunchDirection * ChainLength;
+                Position = ownerPos + LaunchDirection * ChainLength;
 
-                    // Check for surface attach before auto-retract
-                    if (SurfaceCheck != null)
-                    {
-                        var (hit, point) = SurfaceCheck(Position);
-                        if (hit)
-                        {
-                            Attach(point);
-                            // Recalculate chain length to match actual distance to anchor
-                            ChainLength = ownerPos.DistanceTo(point);
-                            break;
-                        }
-                    }
-
-                    // Auto-retract at max length if not attached
-                    if (ChainLength >= MaxChainLength)
-                        ChainState = FistChainState.Retracting;
-                }
+                // Auto-retract at max length if not locked
+                if (ChainLength >= MaxChainLength)
+                    ChainState = FistChainState.Retracting;
                 break;
 
             case FistChainState.Locked:
-                if (!IsAttachedToWorld)
+                if (IsAttachedToWorld)
                 {
-                    // Detached + locked: fist stays at fixed offset from owner
+                    // Anchored: position stays at anchor, body swings (handled in physics)
+                    Position = AnchorPoint;
+                }
+                else
+                {
+                    // Detached + locked: rigid arm, fist stays at fixed offset from owner
                     Position = ownerPos + LaunchDirection * ChainLength;
                 }
-                // Attached + locked: position stays at anchor, body swings (handled in physics)
                 break;
 
             case FistChainState.Retracting:

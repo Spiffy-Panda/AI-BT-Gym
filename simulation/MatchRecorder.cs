@@ -10,12 +10,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
+using AiBtGym.BehaviorTree;
 
 namespace AiBtGym.Simulation;
 
 public class MatchRecorder
 {
     private readonly string[] _names;
+    private readonly string?[] _colors;
     private readonly int _generation;
     private readonly int[] _btVersions;
     private readonly string _matchId;
@@ -32,6 +34,10 @@ public class MatchRecorder
     // Per-tick positional samples
     private readonly List<TickSample> _samples = [];
 
+    // Replay checkpoints (every N ticks)
+    private const int CheckpointInterval = 10;
+    private readonly List<ReplayCheckpoint> _checkpoints = [];
+
     // Grapple tracking
     private readonly bool[,] _prevAttached = new bool[2, 2]; // [fighter, fist: 0=left 1=right]
     private readonly int[] _attachCount = [0, 0];
@@ -40,9 +46,10 @@ public class MatchRecorder
     private readonly int[] _attachedTicks = [0, 0]; // total ticks any fist attached
     private readonly int[] _attachSegments = [0, 0]; // number of attachment segments
 
-    public MatchRecorder(string[] fighterNames, int generation, int[] btVersions, string matchId)
+    public MatchRecorder(string[] fighterNames, int generation, int[] btVersions, string matchId, string?[]? colors = null)
     {
         _names = fighterNames;
+        _colors = colors ?? [null, null];
         _generation = generation;
         _btVersions = btVersions;
         _matchId = matchId;
@@ -78,6 +85,10 @@ public class MatchRecorder
             f0.Health, f1.Health,
             f0.Position.DistanceTo(f1.Position)
         ));
+
+        // Replay checkpoints
+        if (match.Tick % CheckpointInterval == 0)
+            CaptureCheckpoint(match);
 
         // Track grapple attach/detach transitions
         TrackGrapple(0, f0, match);
@@ -190,7 +201,9 @@ public class MatchRecorder
             MatchId = _matchId,
             Generation = _generation,
             Fighter = _names[perspectiveIdx],
+            FighterColor = _colors[perspectiveIdx],
             Opponent = _names[oppIdx],
+            OpponentColor = _colors[oppIdx],
             FighterBtVersion = _btVersions[perspectiveIdx],
             OpponentBtVersion = _btVersions[oppIdx],
             Result = result,
@@ -370,6 +383,48 @@ public class MatchRecorder
 
         return moments;
     }
+
+    // ── Replay ──
+
+    private void CaptureCheckpoint(Match match)
+    {
+        var f0 = match.Fighter0;
+        var f1 = match.Fighter1;
+
+        _checkpoints.Add(new ReplayCheckpoint
+        {
+            T = match.Tick,
+            F = [
+                new ReplayFighter { X = f0.Position.X, Y = f0.Position.Y, Vx = f0.Velocity.X, Vy = f0.Velocity.Y, Hp = f0.Health, G = f0.IsGrounded },
+                new ReplayFighter { X = f1.Position.X, Y = f1.Position.Y, Vx = f1.Velocity.X, Vy = f1.Velocity.Y, Hp = f1.Health, G = f1.IsGrounded }
+            ],
+            Fists = [
+                CaptureFist(f0.LeftFist),
+                CaptureFist(f0.RightFist),
+                CaptureFist(f1.LeftFist),
+                CaptureFist(f1.RightFist)
+            ]
+        });
+    }
+
+    private static ReplayFist CaptureFist(Fist fist) => new()
+    {
+        S = (int)fist.ChainState,
+        X = fist.Position.X,
+        Y = fist.Position.Y,
+        Ax = fist.AnchorPoint.X,
+        Ay = fist.AnchorPoint.Y,
+        Cl = fist.ChainLength,
+        A = fist.IsAttachedToWorld
+    };
+
+    public ReplayData BuildReplayData(List<BtNode> trees0, List<BtNode> trees1, Arena arena) => new()
+    {
+        Arena = new ReplayArena { Width = arena.Width, Height = arena.Height, WallThickness = arena.WallThickness },
+        CheckpointInterval = CheckpointInterval,
+        FighterTrees = [trees0, trees1],
+        Checkpoints = _checkpoints
+    };
 
     // ── Internal data ──
 

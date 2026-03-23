@@ -25,30 +25,47 @@ public class Match
     private readonly BehaviorTreeRunner _bt0;
     private readonly BehaviorTreeRunner _bt1;
 
+    /// <summary>Create a match with deterministic starting positions (legacy).</summary>
     public Match(Arena arena, List<BtNode> tree0, List<BtNode> tree1)
+        : this(arena, tree0, tree1, seed: null) { }
+
+    /// <summary>
+    /// Create a match with optional randomized starting positions.
+    /// When seed is provided, spawn X positions are randomized within the arena
+    /// and which fighter gets left vs right is randomized.
+    /// </summary>
+    public Match(Arena arena, List<BtNode> tree0, List<BtNode> tree1, int? seed)
     {
         Arena = arena;
-        float spawnMargin = arena.Width * 0.25f;
         float groundY = arena.Bounds.End.Y - 20f;
 
-        Fighter0 = new Fighter(0, new Vector2(arena.Bounds.Position.X + spawnMargin, groundY));
-        Fighter1 = new Fighter(1, new Vector2(arena.Bounds.End.X - spawnMargin, groundY));
+        if (seed is int s)
+        {
+            var rng = new Random(s);
+
+            // Randomize spawn distance: 15%–35% from each edge
+            float minMargin = arena.Width * 0.15f;
+            float maxMargin = arena.Width * 0.35f;
+            float marginL = minMargin + (float)rng.NextDouble() * (maxMargin - minMargin);
+            float marginR = minMargin + (float)rng.NextDouble() * (maxMargin - minMargin);
+
+            var posL = new Vector2(arena.Bounds.Position.X + marginL, groundY);
+            var posR = new Vector2(arena.Bounds.End.X - marginR, groundY);
+
+            // Randomize which fighter gets left vs right
+            bool swap = rng.Next(2) == 1;
+            Fighter0 = new Fighter(0, swap ? posR : posL);
+            Fighter1 = new Fighter(1, swap ? posL : posR);
+        }
+        else
+        {
+            float spawnMargin = arena.Width * 0.25f;
+            Fighter0 = new Fighter(0, new Vector2(arena.Bounds.Position.X + spawnMargin, groundY));
+            Fighter1 = new Fighter(1, new Vector2(arena.Bounds.End.X - spawnMargin, groundY));
+        }
 
         _bt0 = new BehaviorTreeRunner(tree0);
         _bt1 = new BehaviorTreeRunner(tree1);
-
-        // Wire up surface check callbacks for all fists
-        SetupSurfaceChecks(Fighter0);
-        SetupSurfaceChecks(Fighter1);
-    }
-
-    private void SetupSurfaceChecks(Fighter f)
-    {
-        (bool, Vector2) Check(Vector2 pos) =>
-            Arena.TryGetNearestSurface(pos, out var pt) ? (true, pt) : (false, Vector2.Zero);
-
-        f.LeftFist.SurfaceCheck = Check;
-        f.RightFist.SurfaceCheck = Check;
     }
 
     /// <summary>Advance the match by one simulation tick.</summary>
@@ -75,10 +92,13 @@ public class Match
         TickFighter(Fighter1);
 
         // Fist-vs-fist collisions (all four pairs)
-        SimPhysics.CheckFistCollision(Fighter0.LeftFist, Fighter1.LeftFist);
-        SimPhysics.CheckFistCollision(Fighter0.LeftFist, Fighter1.RightFist);
-        SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.LeftFist);
-        SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.RightFist);
+        // Skipped when fighters are close ("inside the guard")
+        float fighterDist = Fighter0.Position.DistanceTo(Fighter1.Position);
+        float bodyRadius = Fighter0.BodyRadius;
+        SimPhysics.CheckFistCollision(Fighter0.LeftFist, Fighter1.LeftFist, fighterDist, bodyRadius);
+        SimPhysics.CheckFistCollision(Fighter0.LeftFist, Fighter1.RightFist, fighterDist, bodyRadius);
+        SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.LeftFist, fighterDist, bodyRadius);
+        SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.RightFist, fighterDist, bodyRadius);
 
         // Fist-vs-body hits (notify recorder on hit)
         CheckAndRecordHit(Fighter0.LeftFist, Fighter1, 0, "left");
@@ -127,7 +147,12 @@ public class Match
         // Ground check
         f.IsGrounded = Arena.IsOnGround(f.Position, f.BodyRadius);
 
-        // Tick fists — surface attach is checked inside Fist.Tick via SurfaceCheck callback
+        // Override grounding when being pulled by a grapple — prevents ground friction fighting the pull
+        if ((f.LeftFist.IsAttachedToWorld && f.LeftFist.ChainState == FistChainState.Retracting) ||
+            (f.RightFist.IsAttachedToWorld && f.RightFist.ChainState == FistChainState.Retracting))
+            f.IsGrounded = false;
+
+        // Tick fists
         f.LeftFist.Tick(SimPhysics.FixedDt, f.Position);
         f.RightFist.Tick(SimPhysics.FixedDt, f.Position);
     }

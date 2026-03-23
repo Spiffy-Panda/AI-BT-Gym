@@ -89,10 +89,9 @@ public static class Var
     public static readonly VarRef OppLeftState = new("opp_left_state");
     public static readonly VarRef OppRightState = new("opp_right_state");
 
-    // Arena proximity
-    public static readonly VarRef NearWallLeft = new("near_wall_left");
-    public static readonly VarRef NearWallRight = new("near_wall_right");
-    public static readonly VarRef NearCeiling = new("near_ceiling");
+    // Chain lengths
+    public static readonly VarRef LeftChain = new("left_chain");
+    public static readonly VarRef RightChain = new("right_chain");
 
     // Direction
     public static readonly VarRef OpponentDirX = new("opponent_dir_x");
@@ -135,7 +134,7 @@ public static class When
     public static readonly ISpec RightLocked = Var.RightState.Eq(2);
     public static readonly ISpec RightRetracting = Var.RightState.Eq(3);
 
-    // ── Own fist anchored (attached to world surface) ──
+    // ── Own fist anchored (locked in free space) ──
     public static readonly ISpec LeftAnchored = Var.LeftAttached.Eq(1);
     public static readonly ISpec RightAnchored = Var.RightAttached.Eq(1);
 
@@ -147,8 +146,7 @@ public static class When
     public static readonly ISpec OppRightLocked = Var.OppRightState.Eq(2);
     public static readonly ISpec OppRightRetracting = Var.OppRightState.Eq(3);
 
-    // ── Arena proximity ──
-    public static readonly ISpec AtLeftWall = Var.NearWallLeft.Eq(1);
-    public static readonly ISpec AtRightWall = Var.NearWallRight.Eq(1);
-    public static readonly ISpec AtCeiling = Var.NearCeiling.Eq(1);
+    // ── Chain extension ──
+    public static ISpec LeftChainOver(float len) => Var.LeftChain.Gt(len);
+    public static ISpec RightChainOver(float len) => Var.RightChain.Gt(len);
 }

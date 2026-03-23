@@ -28,7 +28,9 @@ public record BattleLog
     public string MatchId { get; init; } = "";
     public int Generation { get; init; }
     public string Fighter { get; init; } = "";
+    public string? FighterColor { get; init; }
     public string Opponent { get; init; } = "";
+    public string? OpponentColor { get; init; }
     public int FighterBtVersion { get; init; }
     public int OpponentBtVersion { get; init; }
     public MatchResult Result { get; init; }
@@ -43,6 +45,7 @@ public record BattleLog
     public List<PhaseData> PhaseBreakdown { get; init; } = [];
     public List<HitEvent> HitLog { get; init; } = [];
     public List<KeyMoment> KeyMoments { get; init; } = [];
+    public ReplayData? Replay { get; init; }
 }
 
 public enum MatchResult { Win, Loss, Draw }
@@ -110,12 +113,74 @@ public record KeyMoment
     public string Description { get; init; } = "";
 }
 
+// ── Replay Data ──
+
+public record ReplayData
+{
+    public ReplayArena Arena { get; init; } = new();
+    public int CheckpointInterval { get; init; } = 10;
+    public List<List<AiBtGym.BehaviorTree.BtNode>> FighterTrees { get; init; } = [];
+    public List<ReplayCheckpoint> Checkpoints { get; init; } = [];
+}
+
+public record ReplayArena
+{
+    public float Width { get; init; } = 1200;
+    public float Height { get; init; } = 680;
+    public float WallThickness { get; init; } = 10;
+}
+
+public record ReplayCheckpoint
+{
+    [JsonPropertyName("t")]
+    public int T { get; init; }
+    [JsonPropertyName("f")]
+    public List<ReplayFighter> F { get; init; } = [];
+    [JsonPropertyName("fists")]
+    public List<ReplayFist> Fists { get; init; } = [];
+}
+
+public record ReplayFighter
+{
+    [JsonPropertyName("x")]
+    public float X { get; init; }
+    [JsonPropertyName("y")]
+    public float Y { get; init; }
+    [JsonPropertyName("vx")]
+    public float Vx { get; init; }
+    [JsonPropertyName("vy")]
+    public float Vy { get; init; }
+    [JsonPropertyName("hp")]
+    public float Hp { get; init; }
+    [JsonPropertyName("g")]
+    public bool G { get; init; }
+}
+
+public record ReplayFist
+{
+    [JsonPropertyName("s")]
+    public int S { get; init; }
+    [JsonPropertyName("x")]
+    public float X { get; init; }
+    [JsonPropertyName("y")]
+    public float Y { get; init; }
+    [JsonPropertyName("ax")]
+    public float Ax { get; init; }
+    [JsonPropertyName("ay")]
+    public float Ay { get; init; }
+    [JsonPropertyName("cl")]
+    public float Cl { get; init; }
+    [JsonPropertyName("a")]
+    public bool A { get; init; }
+}
+
 // ── Fighter Status ──
 
 public record FighterStatus
 {
     public string FighterId { get; init; } = "";
     public string Name { get; init; } = "";
+    public string? Color { get; init; }
     public int Generation { get; init; }
     public int BtVersion { get; init; }
 
@@ -163,6 +228,9 @@ public record GenerationSummary
     public int FighterCount { get; init; }
     public int TotalMatches { get; init; }
     public string TournamentFormat { get; init; } = "round_robin";
+    public int BestOf { get; init; } = 1;
+    public int Seed { get; init; }
+    public string DllHash { get; init; } = "";
 
     public List<LeaderboardEntry> Leaderboard { get; init; } = [];
     public MetaStats MetaStats { get; init; } = new();
@@ -173,6 +241,7 @@ public record LeaderboardEntry
     public int Rank { get; init; }
     public string FighterId { get; init; } = "";
     public string Name { get; init; } = "";
+    public string? Color { get; init; }
     public float Elo { get; init; }
     public string Record { get; init; } = "";
 }
@@ -182,4 +251,15 @@ public record MetaStats
     public float AvgMatchDurationTicks { get; init; }
     public float KnockoutRate { get; init; }
     public float DrawRate { get; init; }
+}
+
+// ── Test Results ──
+
+public record TestResult
+{
+    public string Name { get; init; } = "";
+    public bool Passed { get; init; }
+    public string? Error { get; init; }
+    public int DurationTicks { get; init; }
+    public ReplayData? Replay { get; init; }
 }
