@@ -1,0 +1,10 @@
+<Project Sdk="Godot.NET.Sdk/4.4.0">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>AiBtGym</RootNamespace>
+    <AssemblyName>AI-BT-Gym</AssemblyName>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>12</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

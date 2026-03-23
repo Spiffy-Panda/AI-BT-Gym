@@ -1,0 +1,34 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Fighter.cs — Fighter body with two fists
+// ─────────────────────────────────────────────────────────────────────────────
+
+using Godot;
+
+namespace AiBtGym.Simulation;
+
+public class Fighter
+{
+    public int Index { get; set; }
+    public Vector2 Position { get; set; }
+    public Vector2 Velocity { get; set; }
+    public float Health { get; set; } = 100f;
+    public bool IsGrounded { get; set; }
+    public float BodyRadius { get; set; } = 18f;
+
+    public Fist LeftFist { get; } = new();
+    public Fist RightFist { get; } = new();
+
+    public Fighter(int index, Vector2 startPos)
+    {
+        Index = index;
+        Position = startPos;
+    }
+
+    public void ApplyDamage(float amount)
+    {
+        Health = Mathf.Max(0, Health - amount);
+    }
+
+    public Fist GetFist(string hand) =>
+        hand.ToLowerInvariant() == "left" ? LeftFist : RightFist;
+}
