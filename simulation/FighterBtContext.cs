@@ -17,6 +17,9 @@ public class FighterBtContext : IBtContext
 
     public int CurrentTick => _tick;
 
+    /// <summary>Optional callback invoked with the action name when an action succeeds.</summary>
+    public Action<string>? OnActionExecuted { get; set; }
+
     public FighterBtContext(Fighter fighter, Fighter opponent, Arena arena, int tick)
     {
         _fighter = fighter;
@@ -71,6 +74,14 @@ public class FighterBtContext : IBtContext
         var parts = action.Split(' ', 2);
         var cmd = parts[0].ToLowerInvariant();
 
+        var result = ExecuteCmd(cmd);
+        if (result == BtStatus.Success)
+            OnActionExecuted?.Invoke(cmd);
+        return result;
+    }
+
+    private BtStatus ExecuteCmd(string cmd)
+    {
         return cmd switch
         {
             // Launch fist in specific directions

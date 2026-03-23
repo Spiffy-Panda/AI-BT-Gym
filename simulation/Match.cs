@@ -2,6 +2,7 @@
 // Match.cs — Orchestrates a fight between two BT-driven fighters
 // ─────────────────────────────────────────────────────────────────────────────
 
+using System;
 using System.Collections.Generic;
 using Godot;
 using AiBtGym.BehaviorTree;
@@ -17,6 +18,9 @@ public class Match
     public int MaxTicks { get; set; } = 60 * 60; // 60 seconds at 60fps
     public bool IsOver { get; private set; }
     public int WinnerIndex { get; private set; } = -1;
+
+    /// <summary>Optional recorder for capturing match events (hits, actions, state).</summary>
+    public MatchRecorder? Recorder { get; set; }
 
     private readonly BehaviorTreeRunner _bt0;
     private readonly BehaviorTreeRunner _bt1;
@@ -55,6 +59,14 @@ public class Match
         // Run behavior trees
         var ctx0 = new FighterBtContext(Fighter0, Fighter1, Arena, Tick);
         var ctx1 = new FighterBtContext(Fighter1, Fighter0, Arena, Tick);
+
+        // Wire up action recording if a recorder is attached
+        if (Recorder != null)
+        {
+            ctx0.OnActionExecuted = action => Recorder.RecordAction(Tick, 0, action);
+            ctx1.OnActionExecuted = action => Recorder.RecordAction(Tick, 1, action);
+        }
+
         _bt0.Apply(ctx0);
         _bt1.Apply(ctx1);
 
@@ -68,14 +80,26 @@ public class Match
         SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.LeftFist);
         SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.RightFist);
 
-        // Fist-vs-body hits
-        SimPhysics.CheckFistHitBody(Fighter0.LeftFist, Fighter1, out _);
-        SimPhysics.CheckFistHitBody(Fighter0.RightFist, Fighter1, out _);
-        SimPhysics.CheckFistHitBody(Fighter1.LeftFist, Fighter0, out _);
-        SimPhysics.CheckFistHitBody(Fighter1.RightFist, Fighter0, out _);
+        // Fist-vs-body hits (notify recorder on hit)
+        CheckAndRecordHit(Fighter0.LeftFist, Fighter1, 0, "left");
+        CheckAndRecordHit(Fighter0.RightFist, Fighter1, 0, "right");
+        CheckAndRecordHit(Fighter1.LeftFist, Fighter0, 1, "left");
+        CheckAndRecordHit(Fighter1.RightFist, Fighter0, 1, "right");
+
+        // Let recorder sample per-tick state
+        Recorder?.RecordTick(this);
 
         Tick++;
         CheckWinConditions();
+    }
+
+    private void CheckAndRecordHit(Fist fist, Fighter target, int attackerIdx, string hand)
+    {
+        if (SimPhysics.CheckFistHitBody(fist, target, out float damage))
+        {
+            Recorder?.RecordHit(Tick, attackerIdx, hand, damage,
+                Fighter0.Position, Fighter1.Position);
+        }
     }
 
     private void TickFighter(Fighter f)
