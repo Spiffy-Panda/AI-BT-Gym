@@ -37,23 +37,21 @@ dotnet build
 - The server runs inside Godot headless and stays alive to serve results
 
 ```bash
-# Start tournament server
-"/c/Program Files/godot/godot_console.exe" --headless --scene res://scenes/tournament_runner.tscn &
+# Cycle server (kill → restart, waits for ready)
+tools/server.sh restart
+
+# Cycle server AND clear all generation data
+tools/server.sh restart-clean
+
+# Stop server
+tools/server.sh stop
+
+# Check server status
+tools/server.sh status
 
 # Trigger a tournament run (server must be running)
 curl -s -X POST -H "Content-Length: 0" http://localhost:8585/api/tournament/run
-
-# Kill the server
-taskkill //F //IM godot_console.exe
-
-# Clear fight data (delete all generations)
-rm -rf generations/gen_*
 ```
-
-**Notes:**
-- The server binds port 8585; if a stale process holds it, kill all `godot_console.exe` first
-- After killing, wait ~2s before restarting to let the port release
-- The server does NOT auto-exit after a tournament; it stays up to serve the dashboard and replay viewer
 
 ## Controls (main scene)
 - Space: pause/unpause

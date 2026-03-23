@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Tournament Server",
+      "runtimeExecutable": "C:\\Program Files\\godot\\godot_console.exe",
+      "runtimeArgs": ["--headless", "--scene", "res://scenes/tournament_runner.tscn"],
+      "port": 8585,
+      "autoPort": true
+    },
+    {
+      "name": "Game (Visual)",
+      "runtimeExecutable": "C:\\Program Files\\godot\\godot_console.exe",
+      "runtimeArgs": ["--scene", "res://scenes/main.tscn"]
+    }
+  ]
+}
