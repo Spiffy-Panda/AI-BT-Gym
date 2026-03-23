@@ -14,6 +14,7 @@ using Godot;
 using AiBtGym.BehaviorTree;
 using AiBtGym.Simulation;
 using static AiBtGym.BehaviorTree.BtNode;
+using static AiBtGym.BehaviorTree.When;
 
 namespace AiBtGym.Tests;
 
@@ -207,7 +208,7 @@ public partial class MovementTests : Node
         // Jump whenever grounded
         var bt = new List<BtNode>
         {
-            Seq(Cond("is_grounded == 1"), Act("jump"))
+            Seq(Cond(Grounded), Act("jump"))
         };
 
         var samples = RunAndSample(bt, 600, sampleEvery: 10); // 10 seconds, fine sampling
@@ -246,11 +247,11 @@ public partial class MovementTests : Node
         {
             Sel(
                 // If attached and extending, lock it
-                Seq(Cond("right_attached == 1"), Cond("right_state == 1"), Act("lock_right")),
+                Seq(Cond(RightAnchored), Cond(RightExtending), Act("lock_right")),
                 // If attached and locked, retract to pull up
-                Seq(Cond("right_attached == 1"), Cond("right_state == 2"), Act("retract_right")),
+                Seq(Cond(RightAnchored), Cond(RightLocked), Act("retract_right")),
                 // If retracted, launch up again
-                Seq(Cond("right_retracted == 1"), Act("launch_right_up")),
+                Seq(Cond(RightReady), Act("launch_right_up")),
                 // Fallback: drift right
                 Act("move_right")
             )
@@ -291,8 +292,8 @@ public partial class MovementTests : Node
         var bt = new List<BtNode>
         {
             Sel(
-                Seq(Cond("right_attached == 1"), Cond("right_state == 1"), Act("lock_right")),
-                Seq(Cond("right_retracted == 1"), Act("launch_right_up"))
+                Seq(Cond(RightAnchored), Cond(RightExtending), Act("lock_right")),
+                Seq(Cond(RightReady), Act("launch_right_up"))
             )
         };
 
@@ -344,10 +345,10 @@ public partial class MovementTests : Node
         {
             Sel(
                 // If right fist attached, lock then retract to pull toward wall
-                Seq(Cond("right_attached == 1"), Cond("right_state == 1"), Act("lock_right")),
-                Seq(Cond("right_attached == 1"), Cond("right_state == 2"), Act("retract_right")),
+                Seq(Cond(RightAnchored), Cond(RightExtending), Act("lock_right")),
+                Seq(Cond(RightAnchored), Cond(RightLocked), Act("retract_right")),
                 // Launch right fist toward right wall
-                Seq(Cond("right_retracted == 1"), Act("launch_right_wall"))
+                Seq(Cond(RightReady), Act("launch_right_wall"))
             )
         };
 
@@ -375,14 +376,14 @@ public partial class MovementTests : Node
         {
             Sel(
                 // Lock attached fists
-                Seq(Cond("left_attached == 1"), Cond("left_state == 1"), Act("lock_left")),
-                Seq(Cond("right_attached == 1"), Cond("right_state == 1"), Act("lock_right")),
+                Seq(Cond(LeftAnchored), Cond(LeftExtending), Act("lock_left")),
+                Seq(Cond(RightAnchored), Cond(RightExtending), Act("lock_right")),
                 // Retract locked+attached fists (pull up)
-                Seq(Cond("left_attached == 1"), Cond("left_state == 2"), Act("retract_left")),
-                Seq(Cond("right_attached == 1"), Cond("right_state == 2"), Act("retract_right")),
+                Seq(Cond(LeftAnchored), Cond(LeftLocked), Act("retract_left")),
+                Seq(Cond(RightAnchored), Cond(RightLocked), Act("retract_right")),
                 // Launch free fists upward
-                Seq(Cond("left_retracted == 1"), Act("launch_left_up")),
-                Seq(Cond("right_retracted == 1"), Act("launch_right_up"))
+                Seq(Cond(LeftReady), Act("launch_left_up")),
+                Seq(Cond(RightReady), Act("launch_right_up"))
             )
         };
 
@@ -415,8 +416,8 @@ public partial class MovementTests : Node
         var startPos = new Vector2(500f, 100f); // high up
         var fighter = new Fighter(0, startPos);
         var dummy = new Fighter(1, new Vector2(900f, arena.Bounds.End.Y - 20f));
-        var bt = new BehaviorTreeRunner(new List<BtNode> { Cond("false") }); // no-op
-        var dummyBt = new BehaviorTreeRunner(new List<BtNode> { Cond("false") });
+        var bt = new BehaviorTreeRunner(new List<BtNode> { Cond(Var.Never) }); // no-op
+        var dummyBt = new BehaviorTreeRunner(new List<BtNode> { Cond(Var.Never) });
 
         float groundY = arena.Bounds.End.Y - fighter.BodyRadius;
         bool hitGround = false;

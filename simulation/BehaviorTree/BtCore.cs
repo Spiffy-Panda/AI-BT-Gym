@@ -94,9 +94,15 @@ public record BtNode(
     public static BtNode Gate(string condition, BtNode child) =>
         new(BtNodeType.ConditionGate, Value: condition, Children: [child]);
 
+    public static BtNode Gate(ISpec spec, BtNode child) =>
+        new(BtNodeType.ConditionGate, Value: spec.Expr, Children: [child]);
+
     // Leaves
     public static BtNode Cond(string expr) =>
         new(BtNodeType.Condition, expr);
+
+    public static BtNode Cond(ISpec spec) =>
+        new(BtNodeType.Condition, spec.Expr);
 
     public static BtNode Act(string action) =>
         new(BtNodeType.Action, action);
