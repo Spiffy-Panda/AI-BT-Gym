@@ -27,7 +27,7 @@ public partial class Main : Node2D
     public override void _Ready()
     {
         // Arena
-        var arena = new Arena(1200, 680);
+        var arena = new Arena(1500, 680);
 
         // Load BTs
         var trees = TestTrees.All;
@@ -95,7 +95,7 @@ public partial class Main : Node2D
     private void RestartMatch()
     {
         var trees = TestTrees.All;
-        var arena = new Arena(1200, 680);
+        var arena = new Arena(1500, 680);
         _match = new Match(arena, trees[Tree0Index % trees.Length], trees[Tree1Index % trees.Length]);
         _renderer0!.Fighter = _match.Fighter0;
         _renderer1!.Fighter = _match.Fighter1;

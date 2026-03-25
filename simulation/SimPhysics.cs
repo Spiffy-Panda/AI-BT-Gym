@@ -11,10 +11,10 @@ public static class SimPhysics
     // Tuning constants
     public const float Gravity = 980f;         // pixels/sec^2
     public const float FixedDt = 1f / 60f;
-    public const float FistDamage = 12f;
+    public const float FistDamage = 7f;           // Season 2: was 12f
     public const float MoveForce = 400f;       // horizontal movement force
     public const float JumpImpulse = -420f;    // upward impulse (Y-down)
-    public const float AirMoveForce = 200f;
+    public const float AirMoveForce = 50f;         // Season 2: was 200f
     public const float MaxHorizontalSpeed = 350f;
     public const float GroundFriction = 0.85f;
     public const float AirFriction = 0.995f;
@@ -127,7 +127,7 @@ public static class SimPhysics
 
             // Knockback
             Vector2 knockDir = (target.Position - fist.Position).Normalized();
-            target.Velocity += knockDir * 250f;
+            target.Velocity += knockDir * 400f;  // Season 2: was 250f
             return true;
         }
         return false;

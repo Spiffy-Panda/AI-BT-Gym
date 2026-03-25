@@ -64,7 +64,9 @@ public record BtNode(
     BtNodeType Type,
     string? Value = null,
     List<BtNode>? Children = null,
-    ParallelPolicy? Policy = null)
+    ParallelPolicy? Policy = null,
+    string? Comment = null,
+    string? SubTree = null)
 {
     // ── Builder helpers ──
 
@@ -72,14 +74,26 @@ public record BtNode(
     public static BtNode Seq(params BtNode[] children) =>
         new(BtNodeType.Sequence, Children: children.ToList());
 
+    public static BtNode Seq(string comment, params BtNode[] children) =>
+        new(BtNodeType.Sequence, Children: children.ToList(), Comment: comment);
+
     public static BtNode Sel(params BtNode[] children) =>
         new(BtNodeType.Selector, Children: children.ToList());
+
+    public static BtNode Sel(string comment, params BtNode[] children) =>
+        new(BtNodeType.Selector, Children: children.ToList(), Comment: comment);
 
     public static BtNode Par(ParallelPolicy policy, params BtNode[] children) =>
         new(BtNodeType.Parallel, Children: children.ToList(), Policy: policy);
 
+    public static BtNode Par(string comment, ParallelPolicy policy, params BtNode[] children) =>
+        new(BtNodeType.Parallel, Children: children.ToList(), Policy: policy, Comment: comment);
+
     public static BtNode Par(params BtNode[] children) =>
         new(BtNodeType.Parallel, Children: children.ToList(), Policy: ParallelPolicy.RequireAll);
+
+    public static BtNode Par(string comment, params BtNode[] children) =>
+        new(BtNodeType.Parallel, Children: children.ToList(), Policy: ParallelPolicy.RequireAll, Comment: comment);
 
     // Decorators (wrap a single child)
     public static BtNode Inv(BtNode child) =>

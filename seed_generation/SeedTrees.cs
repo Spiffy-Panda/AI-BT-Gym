@@ -12,6 +12,7 @@ using AiBtGym.BehaviorTree;
 using static AiBtGym.BehaviorTree.BtNode;
 using static AiBtGym.BehaviorTree.Var;
 using static AiBtGym.BehaviorTree.When;
+using static AiBtGym.Godot.SubTrees;
 
 namespace AiBtGym.Godot;
 
@@ -64,29 +65,18 @@ public static class SeedTrees
     /// </summary>
     public static List<BtNode> RedCounterStriker() =>
     [
-        Sel(
-            // Dodge: if opponent fist is extending toward us and we're close, jump away
-            Seq(Cond(OppLeftExtending), Cond(InRange(200)), Cond(Grounded), Act("jump")),
-            Seq(Cond(OppRightExtending), Cond(InRange(200)), Cond(Grounded), Act("jump")),
-
-            // Counter-punch: if opponent's fist is retracting (whiffed), punish
-            Seq(
-                Cond(InAttackRange),
-                Sel(Cond(OppLeftRetracting), Cond(OppRightRetracting)),
-                Sel(
-                    Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                )
-            ),
+        Sel("Root priority",
+            DodgeFists(),
+            CounterPunch(),
 
             // Proactive poke at mid-range with one fist, keep other ready
-            Seq(Cond(InRange(250)), Cond(OutOfRange(140)), Cond(LeftReady), Cond(RightReady), Act("launch_left_at_opponent")),
+            Seq("Mid-range poke", Cond(InRange(250)), Cond(OutOfRange(140)), Cond(LeftReady), Cond(RightReady), Act("launch_left_at_opponent")),
 
             // Too close — back off
-            Seq(Cond(InRange(100)), Act("move_away_from_opponent")),
+            Seq("Retreat when too close", Cond(InRange(100)), Act("move_away_from_opponent")),
 
             // Close distance if too far
-            Seq(Cond(Far), Act("move_toward_opponent")),
+            Seq("Close distance", Cond(Far), Act("move_toward_opponent")),
 
             Act("move_toward_opponent")
         )
@@ -101,39 +91,34 @@ public static class SeedTrees
     /// </summary>
     public static List<BtNode> GreenGrappleAssassin() =>
     [
-        Sel(
+        Sel("Root priority",
             // Right anchored — attack with left or retract to pull closer
-            Seq(
+            Seq("Right anchor: strike or pull",
                 Cond(RightAnchored), Cond(RightLocked),
-                Sel(
-                    // In range → strike with left
-                    Seq(Cond(InRange(220)), Cond(LeftReady), Act("launch_left_at_opponent")),
-                    // Otherwise retract to pull toward anchor (toward opponent)
+                Sel("Strike or retract",
+                    Seq("Strike with left", Cond(InRange(220)), Cond(LeftReady), Act("launch_left_at_opponent")),
                     Act("retract_right")
                 )
             ),
 
             // Left anchored — mirror
-            Seq(
+            Seq("Left anchor: strike or pull",
                 Cond(LeftAnchored), Cond(LeftLocked),
-                Sel(
-                    Seq(Cond(InRange(220)), Cond(RightReady), Act("launch_right_at_opponent")),
+                Sel("Strike or retract",
+                    Seq("Strike with right", Cond(InRange(220)), Cond(RightReady), Act("launch_right_at_opponent")),
                     Act("retract_left")
                 )
             ),
 
-            // Lock extending fists as approach anchors (only when far —
-            // when close the fist will hit the opponent instead)
-            Seq(Cond(OutOfRange(220)), Cond(RightExtending), Cond(RightChainOver(100)), Act("lock_right")),
-            Seq(Cond(OutOfRange(220)), Cond(LeftExtending), Cond(LeftChainOver(100)), Act("lock_left")),
+            AnchorLocks(outOfRange: 220, chainOver: 100),
 
             // Launch AT opponent — dual purpose: hits if close, becomes
             // approach anchor if far (locked mid-flight by rules above)
-            Seq(Cond(RightReady), Act("launch_right_at_opponent")),
-            Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
+            Seq("Launch right at opponent", Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Launch left at opponent", Cond(LeftReady), Act("launch_left_at_opponent")),
 
             // Ground fallback: jump to get airborne for grapple approach
-            Seq(Cond(Grounded), Cond(OutOfRange(150)), Act("jump")),
+            Seq("Jump to get airborne", Cond(Grounded), Cond(OutOfRange(150)), Act("jump")),
             Act("move_toward_opponent")
         )
     ];
@@ -146,39 +131,34 @@ public static class SeedTrees
     /// </summary>
     public static List<BtNode> BlueSwingShotgun() =>
     [
-        Sel(
+        Sel("Root priority",
             // Left anchored — attack with right mid-swing, then release
-            Seq(
+            Seq("Left anchor: shotgun or swing",
                 Cond(LeftAnchored), Cond(LeftLocked),
-                Sel(
-                    // In range → fire right at opponent (shotgun blast mid-swing)
-                    Seq(Cond(InRange(220)), Cond(RightReady), Act("launch_right_at_opponent")),
-                    // Descending fast near opponent → release for dive momentum
-                    Seq(Cond(VelY.Gt(80)), Cond(InRange(350)), Act("retract_left")),
-                    // Pull toward anchor (toward opponent)
+                Sel("Attack, dive-release, or pull",
+                    Seq("Shotgun blast mid-swing", Cond(InRange(220)), Cond(RightReady), Act("launch_right_at_opponent")),
+                    Seq("Dive-release for momentum", Cond(VelY.Gt(80)), Cond(InRange(350)), Act("retract_left")),
                     Act("retract_left")
                 )
             ),
 
             // Right anchored — mirror
-            Seq(
+            Seq("Right anchor: shotgun or swing",
                 Cond(RightAnchored), Cond(RightLocked),
-                Sel(
-                    Seq(Cond(InRange(220)), Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(VelY.Gt(80)), Cond(InRange(350)), Act("retract_right")),
+                Sel("Attack, dive-release, or pull",
+                    Seq("Shotgun blast mid-swing", Cond(InRange(220)), Cond(LeftReady), Act("launch_left_at_opponent")),
+                    Seq("Dive-release for momentum", Cond(VelY.Gt(80)), Cond(InRange(350)), Act("retract_right")),
                     Act("retract_right")
                 )
             ),
 
-            // Lock extending fists as approach anchors (only when far)
-            Seq(Cond(OutOfRange(200)), Cond(LeftExtending), Cond(LeftChainOver(120)), Act("lock_left")),
-            Seq(Cond(OutOfRange(200)), Cond(RightExtending), Cond(RightChainOver(120)), Act("lock_right")),
+            AnchorLocks(outOfRange: 200, chainOver: 120),
 
             // Launch AT opponent — hits if close, anchors if far
-            Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-            Seq(Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Launch left", Cond(LeftReady), Act("launch_left_at_opponent")),
+            Seq("Launch right", Cond(RightReady), Act("launch_right_at_opponent")),
 
-            Seq(Cond(Grounded), Act("jump")),
+            StayAirborne(),
             Act("move_toward_opponent")
         )
     ];
@@ -190,23 +170,23 @@ public static class SeedTrees
     /// </summary>
     public static List<BtNode> CyanZoneController() =>
     [
-        Sel(
+        Sel("Root priority",
             // Emergency: too close, jump and retreat
-            Seq(Cond(InRange(80)), Cond(Grounded), Act("jump")),
-            Seq(Cond(InRange(80)), Act("move_away_from_opponent")),
+            Seq("Emergency jump", Cond(InRange(80)), Cond(Grounded), Act("jump")),
+            Seq("Emergency retreat", Cond(InRange(80)), Act("move_away_from_opponent")),
 
             // Stagger punches: if left is out, fire right. If right is out, fire left.
-            Seq(Cond(LeftExtending), Cond(InPokeRange), Cond(RightReady), Act("launch_right_at_opponent")),
-            Seq(Cond(RightExtending), Cond(InPokeRange), Cond(LeftReady), Act("launch_left_at_opponent")),
+            Seq("Stagger: right follow-up", Cond(LeftExtending), Cond(InPokeRange), Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Stagger: left follow-up", Cond(RightExtending), Cond(InPokeRange), Cond(LeftReady), Act("launch_left_at_opponent")),
 
             // Both retracted at mid range — open with left
-            Seq(Cond(LeftReady), Cond(RightReady), Cond(InPokeRange), Act("launch_left_at_opponent")),
+            Seq("Open with left poke", Cond(LeftReady), Cond(RightReady), Cond(InPokeRange), Act("launch_left_at_opponent")),
 
             // Close gap if opponent is far
-            Seq(Cond(OutOfRange(260)), Act("move_toward_opponent")),
+            Seq("Close distance", Cond(OutOfRange(260)), Act("move_toward_opponent")),
 
             // Maintain spacing
-            Seq(Cond(InRange(140)), Act("move_away_from_opponent")),
+            Seq("Maintain spacing", Cond(InRange(140)), Act("move_away_from_opponent")),
 
             Act("move_toward_opponent")
         )
@@ -220,60 +200,44 @@ public static class SeedTrees
     /// </summary>
     public static List<BtNode> YellowDiveKicker() =>
     [
-        Sel(
-            // ── Counter-punch: opponent whiffed a fist, punish immediately ──
-            Seq(
-                Cond(InAttackRange),
-                Sel(Cond(OppLeftRetracting), Cond(OppRightRetracting)),
-                Sel(
-                    Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                )
-            ),
+        Sel("Root priority",
+            CounterPunch(),
 
             // ── Left anchored: pull in and strike with right ──
-            Seq(
+            Seq("Left anchor: strike or pull",
                 Cond(LeftAnchored), Cond(LeftLocked),
-                Sel(
-                    // Close → strike
-                    Seq(Cond(InRange(220)), Cond(RightReady), Act("launch_right_at_opponent")),
-                    // Far → retract to pull toward opponent
-                    Seq(Cond(OutOfRange(160)), Act("retract_left")),
+                Sel("Strike, pull, or advance",
+                    Seq("Close-range strike", Cond(InRange(220)), Cond(RightReady), Act("launch_right_at_opponent")),
+                    Seq("Retract to pull closer", Cond(OutOfRange(160)), Act("retract_left")),
                     Act("move_toward_opponent")
                 )
             ),
 
             // ── Right anchored: pull in and strike with left ──
-            Seq(
+            Seq("Right anchor: strike or pull",
                 Cond(RightAnchored), Cond(RightLocked),
-                Sel(
-                    Seq(Cond(InRange(220)), Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(OutOfRange(160)), Act("retract_right")),
+                Sel("Strike, pull, or advance",
+                    Seq("Close-range strike", Cond(InRange(220)), Cond(LeftReady), Act("launch_left_at_opponent")),
+                    Seq("Retract to pull closer", Cond(OutOfRange(160)), Act("retract_right")),
                     Act("move_toward_opponent")
                 )
             ),
 
-            // ── Lock extending fists as approach anchors (only when far) ──
-            Seq(Cond(OutOfRange(200)), Cond(LeftExtending), Cond(LeftChainOver(100)), Act("lock_left")),
-            Seq(Cond(OutOfRange(200)), Cond(RightExtending), Cond(RightChainOver(100)), Act("lock_right")),
+            AnchorLocks(),
 
             // ── Close-range poke: fire ONE fist, keep other for counter ──
-            Seq(Cond(InRange(200)), Cond(LeftReady), Cond(RightReady), Act("launch_left_at_opponent")),
+            Seq("Close-range poke", Cond(InRange(200)), Cond(LeftReady), Cond(RightReady), Act("launch_left_at_opponent")),
 
             // ── Mid-range with one fist ready: opportunistic strike ──
-            Seq(Cond(InRange(250)), Cond(OutOfRange(140)),
-                Sel(
-                    Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                )
+            Seq("Mid-range opportunistic", Cond(InRange(250)), Cond(OutOfRange(140)),
+                StrikeWithAvailable()
             ),
 
             // ── Far: launch AT opponent to create approach anchor ──
-            Seq(Cond(OutOfRange(250)), Cond(LeftReady), Act("launch_left_at_opponent")),
-            Seq(Cond(OutOfRange(250)), Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Far anchor: left", Cond(OutOfRange(250)), Cond(LeftReady), Act("launch_left_at_opponent")),
+            Seq("Far anchor: right", Cond(OutOfRange(250)), Cond(RightReady), Act("launch_right_at_opponent")),
 
-            // Jump whenever grounded
-            Seq(Cond(Grounded), Act("jump")),
+            StayAirborne(),
             Act("move_toward_opponent")
         )
     ];
@@ -286,64 +250,51 @@ public static class SeedTrees
     /// </summary>
     public static List<BtNode> MagentaSwingSniper() =>
     [
-        Sel(
-            // Counter-punch: if opponent whiffed, punish immediately
-            Seq(
-                Cond(InAttackRange),
-                Sel(Cond(OppLeftRetracting), Cond(OppRightRetracting)),
-                Sel(
-                    Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                )
-            ),
+        Sel("Root priority",
+            CounterPunch(),
 
             // Right anchored — swing-snipe or pull toward opponent
-            Seq(
+            Seq("Right anchor: swing-snipe",
                 Cond(RightAnchored), Cond(RightLocked),
-                Sel(
-                    // Descending + close → snipe with left
-                    Seq(Cond(VelY.Gt(15)), Cond(InRange(240)), Cond(LeftReady), Act("launch_left_at_opponent")),
-                    // Close → attack regardless of swing phase
-                    Seq(Cond(InRange(180)), Cond(LeftReady), Act("launch_left_at_opponent")),
-                    // Not close → retract to pull toward opponent (like Blue/Green)
-                    Seq(Cond(OutOfRange(200)), Act("retract_right")),
+                Sel("Snipe, close attack, pull, or advance",
+                    Seq("Downswing snipe", Cond(VelY.Gt(15)), Cond(InRange(240)), Cond(LeftReady), Act("launch_left_at_opponent")),
+                    Seq("Close-range attack", Cond(InRange(180)), Cond(LeftReady), Act("launch_left_at_opponent")),
+                    Seq("Retract to pull closer", Cond(OutOfRange(200)), Act("retract_right")),
                     Act("move_toward_opponent")
                 )
             ),
 
             // Left anchored — mirror
-            Seq(
+            Seq("Left anchor: swing-snipe",
                 Cond(LeftAnchored), Cond(LeftLocked),
-                Sel(
-                    Seq(Cond(VelY.Gt(15)), Cond(InRange(240)), Cond(RightReady), Act("launch_right_at_opponent")),
-                    Seq(Cond(InRange(180)), Cond(RightReady), Act("launch_right_at_opponent")),
-                    Seq(Cond(OutOfRange(200)), Act("retract_left")),
+                Sel("Snipe, close attack, pull, or advance",
+                    Seq("Downswing snipe", Cond(VelY.Gt(15)), Cond(InRange(240)), Cond(RightReady), Act("launch_right_at_opponent")),
+                    Seq("Close-range attack", Cond(InRange(180)), Cond(RightReady), Act("launch_right_at_opponent")),
+                    Seq("Retract to pull closer", Cond(OutOfRange(200)), Act("retract_left")),
                     Act("move_toward_opponent")
                 )
             ),
 
-            // Lock extending fists as anchors (only when far)
-            Seq(Cond(OutOfRange(200)), Cond(RightExtending), Cond(RightChainOver(120)), Act("lock_right")),
-            Seq(Cond(OutOfRange(200)), Cond(LeftExtending), Cond(LeftChainOver(120)), Act("lock_left")),
+            AnchorLocks(outOfRange: 200, chainOver: 120),
 
             // Emergency close range — slightly wider buffer against aggro fighters
-            Seq(Cond(InRange(120)), Cond(Grounded), Act("jump")),
+            Seq("Emergency escape jump", Cond(InRange(120)), Cond(Grounded), Act("jump")),
 
             // Ground melee — one fist is enough
-            Seq(Cond(Grounded), Cond(InMeleeRange), Cond(LeftReady), Act("launch_left_at_opponent")),
-            Seq(Cond(Grounded), Cond(InMeleeRange), Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Ground melee: left", Cond(Grounded), Cond(InMeleeRange), Cond(LeftReady), Act("launch_left_at_opponent")),
+            Seq("Ground melee: right", Cond(Grounded), Cond(InMeleeRange), Cond(RightReady), Act("launch_right_at_opponent")),
 
             // Mid-range poke: fire one fist, keep other for counter
-            Seq(Cond(InPokeRange), Cond(OutOfRange(140)), Cond(LeftReady), Cond(RightReady), Act("launch_left_at_opponent")),
+            Seq("Mid-range disciplined poke", Cond(InPokeRange), Cond(OutOfRange(140)), Cond(LeftReady), Cond(RightReady), Act("launch_left_at_opponent")),
 
             // Launch AT opponent — tighter range for better accuracy
-            Seq(Cond(InRange(250)), Cond(RightReady), Act("launch_right_at_opponent")),
-            Seq(Cond(InRange(250)), Cond(LeftReady), Act("launch_left_at_opponent")),
+            Seq("Tight-range right launch", Cond(InRange(250)), Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Tight-range left launch", Cond(InRange(250)), Cond(LeftReady), Act("launch_left_at_opponent")),
 
             // Far: launch to create approach anchor
-            Seq(Cond(OutOfRange(250)), Cond(RightReady), Act("launch_right_at_opponent")),
+            Seq("Far anchor launch", Cond(OutOfRange(250)), Cond(RightReady), Act("launch_right_at_opponent")),
 
-            Seq(Cond(Grounded), Act("jump")),
+            StayAirborne(),
             Act("move_toward_opponent")
         )
     ];

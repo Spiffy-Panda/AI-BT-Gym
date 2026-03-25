@@ -13,7 +13,7 @@ public class Arena
     public Rect2 Bounds { get; }
     public float WallThickness { get; } = 10f;
 
-    public Arena(float width = 1200f, float height = 680f)
+    public Arena(float width = 1500f, float height = 680f)  // Season 2: was 1200f
     {
         Width = width;
         Height = height;

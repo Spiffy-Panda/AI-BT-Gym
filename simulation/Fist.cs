@@ -23,7 +23,7 @@ public class Fist
 
     // Config
     public float MaxChainLength = 280f;
-    public float ExtendSpeed = 900f;
+    public float ExtendSpeed = 700f;    // Season 2: was 900f
     public float RetractSpeed = 700f;
     public float FistRadius = 8f;
 

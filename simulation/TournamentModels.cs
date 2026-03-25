@@ -125,7 +125,7 @@ public record ReplayData
 
 public record ReplayArena
 {
-    public float Width { get; init; } = 1200;
+    public float Width { get; init; } = 1500;  // Season 2: was 1200
     public float Height { get; init; } = 680;
     public float WallThickness { get; init; } = 10;
 }
