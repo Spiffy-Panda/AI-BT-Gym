@@ -1,0 +1,100 @@
+{
+  "team_id": "team_03",
+  "name": "Blitz_Runners",
+  "color": "#f39c12",
+  "generation": 0,
+  "record": {
+    "wins": 9,
+    "losses": 6,
+    "draws": 0,
+    "matches_played": 15
+  },
+  "elo": 1049.048,
+  "win_rate": 0.6,
+  "aggregate_metrics": {
+    "avg_match_duration_ticks": 1578.8,
+    "avg_score_diff": 2.4,
+    "avg_beacon_ownership_pct": 0.36173892,
+    "avg_kills_per_match": 1.3333334,
+    "avg_deaths_per_match": 1.9333333,
+    "total_score_victories": 9,
+    "total_timeout_wins": 0
+  },
+  "matchup_results": [
+    {
+      "opponent": "team_00_Iron_Vanguard",
+      "result": "loss",
+      "match_file": "match_003_g1_vs_team_00.json"
+    },
+    {
+      "opponent": "team_00_Iron_Vanguard",
+      "result": "loss",
+      "match_file": "match_003_g2_vs_team_00.json"
+    },
+    {
+      "opponent": "team_00_Iron_Vanguard",
+      "result": "loss",
+      "match_file": "match_003_g3_vs_team_00.json"
+    },
+    {
+      "opponent": "team_00_Iron_Vanguard",
+      "result": "loss",
+      "match_file": "match_003_g4_vs_team_00.json"
+    },
+    {
+      "opponent": "team_00_Iron_Vanguard",
+      "result": "loss",
+      "match_file": "match_003_g5_vs_team_00.json"
+    },
+    {
+      "opponent": "team_01_Shadow_Flankers",
+      "result": "win",
+      "match_file": "match_005_g1_vs_team_01.json"
+    },
+    {
+      "opponent": "team_01_Shadow_Flankers",
+      "result": "win",
+      "match_file": "match_005_g2_vs_team_01.json"
+    },
+    {
+      "opponent": "team_01_Shadow_Flankers",
+      "result": "win",
+      "match_file": "match_005_g3_vs_team_01.json"
+    },
+    {
+      "opponent": "team_01_Shadow_Flankers",
+      "result": "win",
+      "match_file": "match_005_g4_vs_team_01.json"
+    },
+    {
+      "opponent": "team_01_Shadow_Flankers",
+      "result": "loss",
+      "match_file": "match_005_g5_vs_team_01.json"
+    },
+    {
+      "opponent": "team_02_Bastion_Guard",
+      "result": "win",
+      "match_file": "match_006_g1_vs_team_02.json"
+    },
+    {
+      "opponent": "team_02_Bastion_Guard",
+      "result": "win",
+      "match_file": "match_006_g2_vs_team_02.json"
+    },
+    {
+      "opponent": "team_02_Bastion_Guard",
+      "result": "win",
+      "match_file": "match_006_g3_vs_team_02.json"
+    },
+    {
+      "opponent": "team_02_Bastion_Guard",
+      "result": "win",
+      "match_file": "match_006_g4_vs_team_02.json"
+    },
+    {
+      "opponent": "team_02_Bastion_Guard",
+      "result": "win",
+      "match_file": "match_006_g5_vs_team_02.json"
+    }
+  ]
+}

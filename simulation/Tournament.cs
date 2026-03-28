@@ -129,7 +129,7 @@ public static class Tournament
                     matchesPlayed++;
 
                     // Build replay data + battle logs from both perspectives
-                    var replay = recorder.BuildReplayData(entries[i].Roots, entries[j].Roots, arena);
+                    var replay = recorder.BuildReplayData(entries[i].Roots, entries[j].Roots, arena, matchSeed);
                     var logI = recorder.BuildBattleLog(0) with { Replay = replay };
                     var logJ = recorder.BuildBattleLog(1) with { Replay = replay };
                     allBattleLogs[i].Add(logI);

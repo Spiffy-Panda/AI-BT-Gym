@@ -1,0 +1,565 @@
+[
+  {
+    "type": "Selector",
+    "children": [
+      {
+        "type": "Selector",
+        "children": [
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "hook_state == 2"
+              },
+              {
+                "type": "Condition",
+                "value": "hook_attached == 0"
+              },
+              {
+                "type": "Action",
+                "value": "detach_hook"
+              }
+            ],
+            "comment": "Detach unanchored lock"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "hook_attached == 1"
+              },
+              {
+                "type": "Action",
+                "value": "retract_hook"
+              }
+            ],
+            "comment": "Retract anchored hook"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "hook_state == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "hook_chain \u003E 60"
+              },
+              {
+                "type": "Action",
+                "value": "lock_hook"
+              }
+            ],
+            "comment": "Lock extending hook"
+          }
+        ],
+        "comment": "Hook state machine",
+        "subTree": "HookStateMachine"
+      },
+      {
+        "type": "Sequence",
+        "children": [
+          {
+            "type": "Condition",
+            "value": "my_health_pct \u003C 0.2"
+          },
+          {
+            "type": "Action",
+            "value": "move_toward_base"
+          }
+        ],
+        "comment": "Heal at base",
+        "subTree": "HealAtBase"
+      },
+      {
+        "type": "Selector",
+        "children": [
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "parry_ready == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 50"
+              },
+              {
+                "type": "Action",
+                "value": "activate_parry"
+              }
+            ],
+            "comment": "Parry melee"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "parry_ready == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 80"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003E 40"
+              },
+              {
+                "type": "Action",
+                "value": "activate_parry"
+              }
+            ],
+            "comment": "Parry hook"
+          }
+        ],
+        "comment": "Parry react",
+        "subTree": "ParryReact"
+      },
+      {
+        "type": "Selector",
+        "children": [
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_vulnerable == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 60"
+              },
+              {
+                "type": "Condition",
+                "value": "fist_ready == 1"
+              },
+              {
+                "type": "Action",
+                "value": "punch_toward_enemy"
+              }
+            ],
+            "comment": "Punish vulnerable melee"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_vulnerable == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "rifle_ready == 1"
+              },
+              {
+                "type": "Action",
+                "value": "shoot_rifle_at_enemy"
+              }
+            ],
+            "comment": "Rifle vulnerable"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_vulnerable == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 300"
+              },
+              {
+                "type": "Action",
+                "value": "move_toward_nearest_enemy"
+              }
+            ],
+            "comment": "Chase vulnerable"
+          }
+        ],
+        "comment": "Exploit vulnerable",
+        "subTree": "ExploitVulnerable"
+      },
+      {
+        "type": "Selector",
+        "children": [
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_weapon_locked == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 400"
+              },
+              {
+                "type": "Action",
+                "value": "move_toward_nearest_enemy"
+              }
+            ],
+            "comment": "Rush locked enemy"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_weapon_locked == 1"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 40"
+              },
+              {
+                "type": "Condition",
+                "value": "fist_ready == 1"
+              },
+              {
+                "type": "Action",
+                "value": "punch_toward_enemy"
+              }
+            ],
+            "comment": "Free punches"
+          }
+        ],
+        "comment": "Punish locked out",
+        "subTree": "PunishLockedOut"
+      },
+      {
+        "type": "Sequence",
+        "children": [
+          {
+            "type": "Condition",
+            "value": "in_beacon_center == 1"
+          },
+          {
+            "type": "Condition",
+            "value": "nearest_enemy_dist \u003C 400"
+          },
+          {
+            "type": "Selector",
+            "children": [
+              {
+                "type": "Sequence",
+                "children": [
+                  {
+                    "type": "Condition",
+                    "value": "in_beacon_center == 1"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dist \u003C 400"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dir_y == 1"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "hook_ready == 1"
+                  },
+                  {
+                    "type": "Action",
+                    "value": "launch_hook_toward_enemy"
+                  }
+                ],
+                "comment": "Dive hook"
+              },
+              {
+                "type": "Sequence",
+                "children": [
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dist \u003C 40"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "fist_ready == 1"
+                  },
+                  {
+                    "type": "Action",
+                    "value": "punch_toward_enemy"
+                  }
+                ],
+                "comment": "Melee punch",
+                "subTree": "MeleePunch"
+              }
+            ],
+            "comment": "Platform dive",
+            "subTree": "GrapplerPlatformDive"
+          }
+        ],
+        "comment": "Platform engage"
+      },
+      {
+        "type": "Sequence",
+        "children": [
+          {
+            "type": "Condition",
+            "value": "dist_to_beacon_center \u003C 200"
+          },
+          {
+            "type": "Condition",
+            "value": "nearest_enemy_dist \u003C 300"
+          },
+          {
+            "type": "Selector",
+            "children": [
+              {
+                "type": "Sequence",
+                "children": [
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dist \u003C 40"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "fist_ready == 1"
+                  },
+                  {
+                    "type": "Action",
+                    "value": "punch_toward_enemy"
+                  }
+                ],
+                "comment": "Melee punch",
+                "subTree": "MeleePunch"
+              },
+              {
+                "type": "Sequence",
+                "children": [
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dist \u003C 350"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dist \u003E 60"
+                  },
+                  {
+                    "type": "Condition",
+                    "value": "hook_ready == 1"
+                  },
+                  {
+                    "type": "Action",
+                    "value": "launch_hook_toward_enemy"
+                  }
+                ],
+                "comment": "Hook chase"
+              },
+              {
+                "type": "Sequence",
+                "children": [
+                  {
+                    "type": "Condition",
+                    "value": "nearest_enemy_dist \u003C 250"
+                  },
+                  {
+                    "type": "Action",
+                    "value": "move_toward_nearest_enemy"
+                  }
+                ],
+                "comment": "Walk chase"
+              }
+            ],
+            "comment": "Grappler engage",
+            "subTree": "GrapplerEngage"
+          }
+        ],
+        "comment": "Engage center"
+      },
+      {
+        "type": "Sequence",
+        "children": [
+          {
+            "type": "Condition",
+            "value": "beacon_center_owner == 1"
+          },
+          {
+            "type": "Condition",
+            "value": "enemy_count_center_beacon \u003E 0"
+          },
+          {
+            "type": "Action",
+            "value": "move_toward_beacon_center"
+          }
+        ],
+        "comment": "Defend center"
+      },
+      {
+        "type": "Selector",
+        "children": [
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "beacon_center_owner != 1"
+              },
+              {
+                "type": "Condition",
+                "value": "dist_to_beacon_center \u003C 200"
+              },
+              {
+                "type": "Condition",
+                "value": "is_grounded == 1"
+              },
+              {
+                "type": "Action",
+                "value": "jump"
+              }
+            ],
+            "comment": "Jump through edge"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "beacon_center_owner != 1"
+              },
+              {
+                "type": "Condition",
+                "value": "dist_to_beacon_center \u003C 250"
+              },
+              {
+                "type": "Condition",
+                "value": "is_grounded == 0"
+              },
+              {
+                "type": "Condition",
+                "value": "hook_ready == 1"
+              },
+              {
+                "type": "Action",
+                "value": "launch_hook_toward_center"
+              }
+            ],
+            "comment": "Hook center airborne"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "beacon_center_owner != 1"
+              },
+              {
+                "type": "Condition",
+                "value": "dist_to_beacon_center \u003E 200"
+              },
+              {
+                "type": "Action",
+                "value": "move_toward_beacon_center"
+              }
+            ],
+            "comment": "Walk to center"
+          }
+        ],
+        "comment": "Reach center platform",
+        "subTree": "ReachCenterPlatform"
+      },
+      {
+        "type": "Sequence",
+        "children": [
+          {
+            "type": "Condition",
+            "value": "in_beacon_center == 1"
+          },
+          {
+            "type": "Action",
+            "value": "move_toward_beacon_center"
+          }
+        ],
+        "comment": "Hold center"
+      },
+      {
+        "type": "Sequence",
+        "children": [
+          {
+            "type": "Condition",
+            "value": "beacon_center_owner == 1"
+          },
+          {
+            "type": "Condition",
+            "value": "enemy_count_center_beacon == 0"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "owned_beacon_count \u003C 3"
+              },
+              {
+                "type": "Action",
+                "value": "move_toward_nearest_unowned"
+              }
+            ],
+            "comment": "Cap nearest unowned",
+            "subTree": "CapNearestUnowned"
+          }
+        ],
+        "comment": "Help sides"
+      },
+      {
+        "type": "Selector",
+        "children": [
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "score_diff \u003C 3"
+              },
+              {
+                "type": "Condition",
+                "value": "score_diff \u003E -3"
+              },
+              {
+                "type": "Condition",
+                "value": "enemy_beacon_count \u003E 0"
+              },
+              {
+                "type": "Action",
+                "value": "move_toward_nearest_contested"
+              }
+            ],
+            "comment": "Tied: flip beacon"
+          },
+          {
+            "type": "Sequence",
+            "children": [
+              {
+                "type": "Condition",
+                "value": "score_diff \u003C -3"
+              },
+              {
+                "type": "Condition",
+                "value": "nearest_enemy_dist \u003C 400"
+              },
+              {
+                "type": "Action",
+                "value": "move_toward_nearest_enemy"
+              }
+            ],
+            "comment": "Losing: chase kill"
+          }
+        ],
+        "comment": "Late game push",
+        "subTree": "LateGamePush"
+      },
+      {
+        "type": "Action",
+        "value": "move_toward_beacon_center"
+      }
+    ]
+  }
+]

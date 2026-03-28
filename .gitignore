@@ -42,3 +42,12 @@ desktop.ini
 
 # Tournament output (regenerated)
 generations/
+
+# Battle replay logs (large, regenerated)
+**/battles/match_*.json
+
+# Replay config (transient, written by server)
+replay_config.json
+
+# Archived experiments
+archive/

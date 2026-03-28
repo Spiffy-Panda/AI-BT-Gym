@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using Godot;
 using AiBtGym.BehaviorTree;
 using AiBtGym.Simulation;
+using AiBtGym.Simulation.BeaconBrawl;
 using AiBtGym.Tests;
 
 namespace AiBtGym.Godot;
@@ -26,8 +27,10 @@ public partial class TournamentRunner : Node
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
     private string _outputPath = "";
-    private bool _tournamentRunning;
-    private GenerationSummary? _lastSummary;
+    private string _projectDir = "";
+    private readonly HashSet<string> _runningTournaments = new();
+    private readonly object _runningLock = new();
+    private readonly Dictionary<string, GenerationSummary> _lastSummaries = new();
     private List<TestResult>? _lastTestResults;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -38,8 +41,8 @@ public partial class TournamentRunner : Node
 
     public override void _Ready()
     {
-        _outputPath = Path.Combine(
-            ProjectSettings.GlobalizePath("res://"), "generations");
+        _projectDir = ProjectSettings.GlobalizePath("res://");
+        _outputPath = Path.Combine(_projectDir, "generations");
 
         var port = System.Environment.GetEnvironmentVariable("PORT") ?? "8585";
         _listener = new HttpListener();
@@ -109,20 +112,63 @@ public partial class TournamentRunner : Node
                 await ServeReplayViewer(res);
             else if (path == "/tests" && method == "GET")
                 await ServeTestPage(res);
+            else if (path == "/bt-compare" && method == "GET")
+                await ServeBtCompare(res);
+            else if (path == "/api/replay/launch" && method == "POST")
+                await LaunchReplay(req, res);
             else if (path == "/api/tests/run" && method == "POST")
                 await RunTests(res);
             else if (path == "/api/tests/results" && method == "GET")
                 await ServeJson(res, _lastTestResults ?? new List<TestResult>());
+
+            // ── Tournament list ──
+            else if (path == "/api/tournaments" && method == "GET")
+                await ServeTournamentList(res);
+
+            // ── Tournament-scoped routes: /api/tournaments/{tid}/... ──
+            else if (path.StartsWith("/api/tournaments/") && method == "GET")
+            {
+                var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                // parts: ["api", "tournaments", "{tid}", ...]
+                if (parts.Length >= 3)
+                {
+                    var tid = parts[2];
+                    if (parts.Length == 3)
+                        await ServeTournamentInfo(res, tid);
+                    else if (parts.Length >= 4 && parts[3] == "generations")
+                    {
+                        var outPath = GetTournamentOutputPath(tid);
+                        if (parts.Length == 4)
+                            await ServeGenerations(res, outPath);
+                        else
+                            await ServeGenerationData(res, path, outPath, genPartIndex: 4);
+                    }
+                    else if (parts.Length >= 4 && parts[3] == "status")
+                        await ServeTournamentStatus(res, tid);
+                    else
+                    { res.StatusCode = 404; await WriteText(res, "Not found"); }
+                }
+                else { res.StatusCode = 400; await WriteText(res, "Bad request"); }
+            }
+            else if (path.StartsWith("/api/tournaments/") && method == "POST")
+            {
+                var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 4 && parts[3] == "run")
+                    await RunTournament(req, res, parts[2]);
+                else
+                { res.StatusCode = 404; await WriteText(res, "Not found"); }
+            }
+
+            // ── Legacy routes (default tournament) ──
             else if (path == "/api/status" && method == "GET")
-                await ServeJson(res, new { tournamentRunning = _tournamentRunning, lastSummary = _lastSummary });
+                await ServeTournamentStatus(res, "default");
             else if (path == "/api/tournament/run" && method == "POST")
-                await RunTournament(req, res);
+                await RunTournament(req, res, "default");
             else if (path == "/api/generations" && method == "GET")
-                await ServeGenerations(res);
-            else if (path == "/bt-compare" && method == "GET")
-                await ServeBtCompare(res);
+                await ServeGenerations(res, _outputPath);
             else if (path.StartsWith("/api/generations/") && method == "GET")
-                await ServeGenerationData(res, path);
+                await ServeGenerationData(res, path, _outputPath, genPartIndex: 2)
+            ;
             else
             {
                 res.StatusCode = 404;
@@ -143,51 +189,119 @@ public partial class TournamentRunner : Node
 
     // ── API Handlers ──
 
-    private async System.Threading.Tasks.Task RunTournament(HttpListenerRequest req, HttpListenerResponse res)
+    private string GetTournamentOutputPath(string tournamentId)
     {
-        if (_tournamentRunning)
+        if (tournamentId == "default") return _outputPath;
+        return Path.Combine(_projectDir, "tournaments", tournamentId);
+    }
+
+    private async System.Threading.Tasks.Task ServeTournamentList(HttpListenerResponse res)
+    {
+        var tournaments = new List<object>();
+        foreach (var config in TournamentRegistry.GetAll())
         {
-            res.StatusCode = 409;
-            await ServeJson(res, new { error = "Tournament already running" });
-            return;
+            var outPath = GetTournamentOutputPath(config.Id);
+            int genCount = 0;
+            int latestGen = -1;
+            if (Directory.Exists(outPath))
+            {
+                var dirs = Directory.GetDirectories(outPath, "gen_*");
+                genCount = dirs.Length;
+                if (dirs.Length > 0)
+                    latestGen = dirs.Select(d => int.TryParse(Path.GetFileName(d).Replace("gen_", ""), out int n) ? n : -1).Max();
+            }
+            bool running;
+            lock (_runningLock) { running = _runningTournaments.Contains(config.Id); }
+            tournaments.Add(new
+            {
+                id = config.Id,
+                displayName = config.DisplayName,
+                generationCount = genCount,
+                latestGeneration = latestGen,
+                running
+            });
         }
+        await ServeJson(res, tournaments);
+    }
+
+    private async System.Threading.Tasks.Task ServeTournamentInfo(HttpListenerResponse res, string tournamentId)
+    {
+        var config = TournamentRegistry.Get(tournamentId);
+        if (config == null) { res.StatusCode = 404; await WriteText(res, "Tournament not found"); return; }
+        var outPath = GetTournamentOutputPath(tournamentId);
+        int genCount = 0;
+        if (Directory.Exists(outPath))
+            genCount = Directory.GetDirectories(outPath, "gen_*").Length;
+        bool running;
+        lock (_runningLock) { running = _runningTournaments.Contains(tournamentId); }
+        await ServeJson(res, new { id = config.Id, displayName = config.DisplayName, generationCount = genCount, running });
+    }
+
+    private async System.Threading.Tasks.Task ServeTournamentStatus(HttpListenerResponse res, string tournamentId)
+    {
+        bool running;
+        lock (_runningLock) { running = _runningTournaments.Contains(tournamentId); }
+        _lastSummaries.TryGetValue(tournamentId, out var lastSummary);
+        await ServeJson(res, new { tournamentRunning = running, lastSummary });
+    }
+
+    private async System.Threading.Tasks.Task RunTournament(HttpListenerRequest req, HttpListenerResponse res, string tournamentId)
+    {
+        var config = TournamentRegistry.Get(tournamentId);
+        if (config == null) { res.StatusCode = 404; await ServeJson(res, new { error = "Unknown tournament: " + tournamentId }); return; }
+
+        lock (_runningLock)
+        {
+            if (_runningTournaments.Contains(tournamentId))
+            {
+                res.StatusCode = 409;
+                _ = ServeJson(res, new { error = $"Tournament '{tournamentId}' already running" });
+                return;
+            }
+            _runningTournaments.Add(tournamentId);
+        }
+
+        var outPath = GetTournamentOutputPath(tournamentId);
 
         // Determine generation number
         int gen = 0;
-        if (Directory.Exists(_outputPath))
+        if (Directory.Exists(outPath))
         {
-            var dirs = Directory.GetDirectories(_outputPath, "gen_*");
+            var dirs = Directory.GetDirectories(outPath, "gen_*");
             if (dirs.Length > 0)
                 gen = dirs.Select(d => int.TryParse(Path.GetFileName(d).Replace("gen_", ""), out int n) ? n : -1).Max() + 1;
         }
 
-        _tournamentRunning = true;
-        GD.Print($"Starting generation {gen}...");
+        GD.Print($"[{tournamentId}] Starting generation {gen}...");
 
         try
         {
-            // Select trees based on generation
-            var (names, trees, hexColors) = gen switch
-            {
-                >= 3 => (Gen003Trees.Names, Gen003Trees.All, Gen003Trees.HexColors),
-                2    => (Gen002Trees.Names, Gen002Trees.All, Gen002Trees.HexColors),
-                1    => (Gen001Trees.Names, Gen001Trees.All, Gen001Trees.HexColors),
-                _    => (SeedTrees.Names, SeedTrees.All, SeedTrees.HexColors)
-            };
-            var entries = Tournament.EntriesFromSeed(names, trees, hexColors);
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var summary = Tournament.RunGeneration(entries, generation: gen, outputPath: _outputPath);
+            GenerationSummary summary;
+
+            if (config.GameType == TournamentGameType.BeaconBrawl && config.GetBeaconTeams != null)
+            {
+                var teamEntries = config.GetBeaconTeams(gen);
+                summary = BeaconTournament.RunGeneration(teamEntries, generation: gen, outputPath: outPath);
+            }
+            else
+            {
+                var contestants = config.GetContestants(gen);
+                var entries = Tournament.EntriesFromSeed(contestants.Names, contestants.Trees, contestants.HexColors);
+                summary = Tournament.RunGeneration(entries, generation: gen, outputPath: outPath);
+            }
             stopwatch.Stop();
 
-            _lastSummary = summary;
-            _tournamentRunning = false;
+            _lastSummaries[tournamentId] = summary;
+            lock (_runningLock) { _runningTournaments.Remove(tournamentId); }
 
-            GD.Print($"  Gen {gen} completed in {stopwatch.ElapsedMilliseconds}ms");
+            GD.Print($"[{tournamentId}]   Gen {gen} completed in {stopwatch.ElapsedMilliseconds}ms");
             foreach (var entry in summary.Leaderboard)
                 GD.Print($"    #{entry.Rank}  {entry.Name,-28} ELO {entry.Elo,7:F1}  {entry.Record}");
 
             await ServeJson(res, new
             {
+                tournament = tournamentId,
                 generation = gen,
                 elapsedMs = stopwatch.ElapsedMilliseconds,
                 summary
@@ -195,18 +309,18 @@ public partial class TournamentRunner : Node
         }
         catch (Exception ex)
         {
-            _tournamentRunning = false;
+            lock (_runningLock) { _runningTournaments.Remove(tournamentId); }
             res.StatusCode = 500;
             await ServeJson(res, new { error = ex.Message });
         }
     }
 
-    private async System.Threading.Tasks.Task ServeGenerations(HttpListenerResponse res)
+    private async System.Threading.Tasks.Task ServeGenerations(HttpListenerResponse res, string outputPath)
     {
         var gens = new List<object>();
-        if (Directory.Exists(_outputPath))
+        if (Directory.Exists(outputPath))
         {
-            foreach (var dir in Directory.GetDirectories(_outputPath, "gen_*").OrderBy(d => d))
+            foreach (var dir in Directory.GetDirectories(outputPath, "gen_*").OrderBy(d => d))
             {
                 var summaryPath = Path.Combine(dir, "generation_summary.json");
                 if (File.Exists(summaryPath))
@@ -220,29 +334,31 @@ public partial class TournamentRunner : Node
         await ServeJson(res, gens);
     }
 
-    private async System.Threading.Tasks.Task ServeGenerationData(HttpListenerResponse res, string path)
+    private async System.Threading.Tasks.Task ServeGenerationData(HttpListenerResponse res, string path, string outputPath, int genPartIndex)
     {
-        // /api/generations/{id} — generation summary
-        // /api/generations/{id}/fighters — list fighters
-        // /api/generations/{id}/fighters/{fid} — fighter status
-        // /api/generations/{id}/fighters/{fid}/battles — list battles
-        // /api/generations/{id}/fighters/{fid}/battles/{bid} — battle log
+        // Generic handler for generation data routes.
+        // genPartIndex is the index in parts[] where the generation ID appears.
+        // For legacy: /api/generations/{id}/... → genPartIndex=2
+        // For scoped: /api/tournaments/{tid}/generations/{id}/... → genPartIndex=4
         var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        // parts: ["api", "generations", "{id}", ...]
 
-        if (parts.Length < 3) { res.StatusCode = 400; await WriteText(res, "Bad request"); return; }
+        if (parts.Length <= genPartIndex) { res.StatusCode = 400; await WriteText(res, "Bad request"); return; }
 
         // Handle "sub-trees" pseudo-generation
-        if (parts[2] == "sub-trees")
+        if (parts[genPartIndex] == "sub-trees")
         {
-            await ServeSubTreeData(res, parts);
+            // Remap parts so ServeSubTreeData sees ["api", "generations", "sub-trees", ...]
+            var remapped = new[] { "api", "generations" }.Concat(parts.Skip(genPartIndex)).ToArray();
+            await ServeSubTreeData(res, remapped);
             return;
         }
 
-        string genDir = Path.Combine(_outputPath, $"gen_{int.Parse(parts[2]):D3}");
+        string genDir = Path.Combine(outputPath, $"gen_{int.Parse(parts[genPartIndex]):D3}");
         if (!Directory.Exists(genDir)) { res.StatusCode = 404; await WriteText(res, "Generation not found"); return; }
 
-        if (parts.Length == 3)
+        int fightersIdx = genPartIndex + 1;
+
+        if (parts.Length == genPartIndex + 1)
         {
             // Generation summary
             var summaryPath = Path.Combine(genDir, "generation_summary.json");
@@ -253,74 +369,129 @@ public partial class TournamentRunner : Node
             return;
         }
 
-        if (parts.Length >= 4 && parts[3] == "fighters")
+        if (parts.Length >= fightersIdx + 1 && parts[fightersIdx] == "fighters")
         {
+            // Support both "fighters" (fight mode) and "teams" (beacon brawl) directory names
             var fightersDir = Path.Combine(genDir, "fighters");
+            if (!Directory.Exists(fightersDir))
+                fightersDir = Path.Combine(genDir, "teams");
             if (!Directory.Exists(fightersDir)) { res.StatusCode = 404; await WriteText(res, "No fighters"); return; }
 
-            if (parts.Length == 4)
+            int fidIdx = fightersIdx + 1;
+
+            if (parts.Length == fightersIdx + 1)
             {
-                // List fighters
-                var fighters = new List<object>();
+                // List fighters/teams — serve raw JSON objects to support both FighterStatus and BeaconTeamStatus
+                var items = new List<Dictionary<string, object?>>();
                 foreach (var dir in Directory.GetDirectories(fightersDir).OrderBy(d => d))
                 {
                     var statusPath = Path.Combine(dir, "status.json");
                     if (File.Exists(statusPath))
                     {
                         var json = File.ReadAllText(statusPath);
-                        var status = JsonSerializer.Deserialize<FighterStatus>(json, TournamentJson.Options);
-                        if (status != null) fighters.Add(status);
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, object?>>(json, TournamentJson.Options);
+                        if (dict != null)
+                        {
+                            // Normalize: if team_id exists but fighter_id doesn't, alias it
+                            if (dict.ContainsKey("team_id") && !dict.ContainsKey("fighter_id"))
+                                dict["fighter_id"] = dict["team_id"];
+                            items.Add(dict);
+                        }
                     }
                 }
-                await ServeJson(res, fighters);
+                await ServeJson(res, items);
                 return;
             }
 
             // Find fighter dir by partial match
-            string fighterId = parts[4];
+            string fighterId = parts[fidIdx];
             var fighterDir = Directory.GetDirectories(fightersDir)
                 .FirstOrDefault(d => Path.GetFileName(d).StartsWith(fighterId));
             if (fighterDir == null) { res.StatusCode = 404; await WriteText(res, "Fighter not found"); return; }
 
-            if (parts.Length == 5)
+            int subIdx = fidIdx + 1;
+
+            if (parts.Length == fidIdx + 1)
             {
-                // Fighter status
+                // Fighter/team status — inject fighter_id alias if needed
                 var statusPath = Path.Combine(fighterDir, "status.json");
                 if (File.Exists(statusPath))
-                    await ServeRawJson(res, File.ReadAllText(statusPath));
+                {
+                    var json = File.ReadAllText(statusPath);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, object?>>(json, TournamentJson.Options);
+                    if (dict != null && dict.ContainsKey("team_id") && !dict.ContainsKey("fighter_id"))
+                        dict["fighter_id"] = dict["team_id"];
+                    await ServeJson(res, dict);
+                }
                 else
                 { res.StatusCode = 404; await WriteText(res, "Status not found"); }
                 return;
             }
 
-            if (parts.Length >= 6 && parts[5] == "bt")
+            if (parts.Length >= subIdx + 1 && parts[subIdx] == "bt")
             {
+                // Try standard fight BT first, then beacon brawl pawn BTs
                 var btPath = Path.Combine(fighterDir, "bt_v0.json");
                 if (File.Exists(btPath))
+                {
                     await ServeRawJson(res, File.ReadAllText(btPath));
+                }
                 else
-                { res.StatusCode = 404; await WriteText(res, "BT not found"); }
+                {
+                    // Beacon brawl: wrap each pawn BT in a labeled Selector so the
+                    // tree viewer renders them as top-level sections.
+                    var pawnBts = Directory.GetFiles(fighterDir, "pawn_*_bt.json").OrderBy(f => f).ToArray();
+                    if (pawnBts.Length > 0)
+                    {
+                        var combined = new List<object>();
+                        for (int pi = 0; pi < pawnBts.Length; pi++)
+                        {
+                            var pawnNodes = JsonSerializer.Deserialize<List<object>>(
+                                File.ReadAllText(pawnBts[pi]), TournamentJson.Options) ?? [];
+                            // Detect role by scanning for hook/rifle actions in the tree JSON
+                            var btText = File.ReadAllText(pawnBts[pi]);
+                            string role = btText.Contains("launch_hook") || btText.Contains("punch_") ? "Grappler"
+                                        : btText.Contains("shoot_rifle") || btText.Contains("shoot_pistol") ? "Gunner"
+                                        : "Unknown";
+                            string label = $"Pawn {pi} ({role})";
+                            // Wrap pawn roots in a Selector with comment label
+                            combined.Add(new Dictionary<string, object?>
+                            {
+                                ["type"] = "Selector",
+                                ["comment"] = label,
+                                ["children"] = pawnNodes
+                            });
+                        }
+                        await ServeJson(res, combined);
+                    }
+                    else
+                    { res.StatusCode = 404; await WriteText(res, "BT not found"); }
+                }
                 return;
             }
 
-            if (parts.Length >= 6 && parts[5] == "battles")
+            if (parts.Length >= subIdx + 1 && parts[subIdx] == "battles")
             {
                 var battlesDir = Path.Combine(fighterDir, "battles");
                 if (!Directory.Exists(battlesDir)) { res.StatusCode = 404; await WriteText(res, "No battles"); return; }
 
-                if (parts.Length == 6)
+                int battleIdx = subIdx + 1;
+
+                if (parts.Length == subIdx + 1)
                 {
                     // List battles — include filename for each so the client can reference the path
+                    // Supports both BattleLog (fight) and BeaconBattleLog (beacon brawl) formats
                     var battles = new List<object>();
                     foreach (var file in Directory.GetFiles(battlesDir, "*.json").OrderBy(f => f))
                     {
                         var json = File.ReadAllText(file);
-                        var log = JsonSerializer.Deserialize<BattleLog>(json, TournamentJson.Options);
-                        if (log != null)
+                        var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json, TournamentJson.Options);
+                        if (dict != null)
                         {
-                            // Re-serialize with the filename injected
-                            var dict = JsonSerializer.Deserialize<Dictionary<string, object>>(json, TournamentJson.Options)!;
                             dict["_filename"] = Path.GetFileName(file);
+                            // Normalize: beacon brawl uses "team"/"opponent" but dashboard expects "fighter"/"opponent"
+                            if (dict.ContainsKey("team") && !dict.ContainsKey("fighter"))
+                                dict["fighter"] = dict["team"];
                             battles.Add(dict);
                         }
                     }
@@ -328,10 +499,10 @@ public partial class TournamentRunner : Node
                     return;
                 }
 
-                if (parts.Length == 7)
+                if (parts.Length == battleIdx + 1)
                 {
                     // Single battle log
-                    string battleFile = parts[6];
+                    string battleFile = parts[battleIdx];
                     if (!battleFile.EndsWith(".json")) battleFile += ".json";
                     var battlePath = Path.Combine(battlesDir, battleFile);
                     if (File.Exists(battlePath))
@@ -419,6 +590,110 @@ public partial class TournamentRunner : Node
         await WriteBytes(res, Encoding.UTF8.GetBytes(BuildTestPageHtml()));
     }
 
+    // ── Replay Launch (opens Godot window) ──
+
+    private async System.Threading.Tasks.Task LaunchReplay(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        // Read request body
+        string body;
+        using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
+            body = await reader.ReadToEndAsync();
+
+        var payload = JsonSerializer.Deserialize<JsonElement>(body);
+        var tournament = payload.TryGetProperty("tournament", out var t) ? t.GetString() ?? "default" : "default";
+        var gen = payload.TryGetProperty("gen", out var g) ? g.GetString() ?? "" : "";
+        var fighter = payload.TryGetProperty("fighter", out var f) ? f.GetString() ?? "" : "";
+        var matchFile = payload.TryGetProperty("match", out var m) ? m.GetString() ?? "" : "";
+
+        if (string.IsNullOrEmpty(gen) || string.IsNullOrEmpty(fighter) || string.IsNullOrEmpty(matchFile))
+        {
+            res.StatusCode = 400;
+            await ServeJson(res, new { error = "Missing gen, fighter, or match" });
+            return;
+        }
+
+        // Resolve battle log path — support both "fighters" and "teams" directories
+        var outPath = GetTournamentOutputPath(tournament);
+        var genDir = Path.Combine(outPath, gen);
+        if (!Directory.Exists(genDir))
+        {
+            // Try zero-padded format (gen_000)
+            if (int.TryParse(gen.Replace("gen_", ""), out int genNum))
+                genDir = Path.Combine(outPath, $"gen_{genNum:D3}");
+        }
+
+        // Find the fighters/teams directory
+        var entitiesDir = Path.Combine(genDir, "fighters");
+        if (!Directory.Exists(entitiesDir))
+            entitiesDir = Path.Combine(genDir, "teams");
+
+        // Find the fighter/team directory by prefix match (handles fighter_02 → team_02_Name)
+        string? entityDir = null;
+        if (Directory.Exists(entitiesDir))
+        {
+            // Try exact match first, then prefix match on the ID portion
+            entityDir = Directory.GetDirectories(entitiesDir)
+                .FirstOrDefault(d => Path.GetFileName(d) == fighter);
+            if (entityDir == null)
+            {
+                // Extract the numeric ID and match across fighter/team naming (fighter_02 → team_02)
+                var numericPart = System.Text.RegularExpressions.Regex.Match(fighter, @"\d+");
+                if (numericPart.Success)
+                {
+                    entityDir = Directory.GetDirectories(entitiesDir)
+                        .FirstOrDefault(d => System.Text.RegularExpressions.Regex.IsMatch(
+                            Path.GetFileName(d), $@"^(fighter|team)_{numericPart.Value}(_|$)"));
+                }
+            }
+            // Fallback: try StartsWith on the directory name
+            entityDir ??= Directory.GetDirectories(entitiesDir)
+                .FirstOrDefault(d => Path.GetFileName(d).StartsWith(fighter));
+        }
+
+        if (entityDir == null)
+        {
+            res.StatusCode = 404;
+            await ServeJson(res, new { error = $"Fighter/team not found: {fighter} in {entitiesDir}" });
+            return;
+        }
+
+        if (!matchFile.EndsWith(".json")) matchFile += ".json";
+        var battleLogPath = Path.Combine(entityDir, "battles", matchFile);
+
+        if (!File.Exists(battleLogPath))
+        {
+            res.StatusCode = 404;
+            await ServeJson(res, new { error = $"Battle log not found: {battleLogPath}" });
+            return;
+        }
+
+        // Write replay config
+        var configPath = Path.Combine(_projectDir, "replay_config.json");
+        var configJson = JsonSerializer.Serialize(new { battle_log_path = battleLogPath }, TournamentJson.Options);
+        File.WriteAllText(configPath, configJson);
+
+        // Launch Godot with replay scene (visible window)
+        var godotPath = @"C:\Program Files\godot\godot.exe";
+        var args = $"--path \"{_projectDir}\" --scene res://scenes/replay.tscn";
+        GD.Print($"Launching replay: {godotPath} {args}");
+
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(godotPath, args)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = _projectDir
+            };
+            System.Diagnostics.Process.Start(psi);
+            await ServeJson(res, new { status = "launched", battle_log = battleLogPath });
+        }
+        catch (Exception ex)
+        {
+            res.StatusCode = 500;
+            await ServeJson(res, new { error = $"Failed to launch Godot: {ex.Message}" });
+        }
+    }
+
     // ── BT Compare ──
 
     private async System.Threading.Tasks.Task ServeBtCompare(HttpListenerResponse res)
@@ -475,6 +750,16 @@ public partial class TournamentRunner : Node
   .hit-row { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
   .moment { padding: 6px 0; border-bottom: 1px solid var(--border); }
   .moment .event-type { color: var(--accent); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  details.rounds-foldout { margin-bottom: 16px; }
+  details.rounds-foldout > summary { cursor: pointer; padding: 10px 16px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--accent); list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.rounds-foldout > summary::-webkit-details-marker { display: none; }
+  details.rounds-foldout > summary::before { content: '▸'; transition: transform 0.15s; display: inline-block; }
+  details.rounds-foldout[open] > summary::before { transform: rotate(90deg); }
+  details.rounds-foldout[open] > summary { border-radius: 8px 8px 0 0; border-bottom: none; }
+  details.rounds-foldout > .rounds-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 8px 8px; background: var(--card); }
+  details.rounds-foldout .round-row { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 14px; }
+  details.rounds-foldout .round-row:last-child { border-bottom: none; }
+  details.rounds-foldout .round-row:hover { background: rgba(88,166,255,0.05); }
   .breadcrumb { font-size: 14px; margin-bottom: 16px; color: var(--dim); display: flex; align-items: center; flex-wrap: wrap; }
   .breadcrumb a { color: var(--accent); text-decoration: none; cursor: pointer; }
   .breadcrumb a:hover { text-decoration: underline; }
@@ -486,9 +771,14 @@ public partial class TournamentRunner : Node
 </head>
 <body>
 <div style="display:flex;justify-content:space-between;align-items:center">
-  <div><h1>AI-BT-Gym</h1><p class="subtitle">Evolutionary Behavior Tree Tournament</p></div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div><h1>AI-BT-Gym</h1><p class="subtitle">Evolutionary Behavior Tree Tournament</p></div>
+    <select id="tournamentSelect" onchange="switchTournament(this.value)" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px;cursor:pointer;min-width:160px">
+      <option value="default">Loading...</option>
+    </select>
+  </div>
   <div style="display:flex;gap:8px">
-    <a href="/bt-compare" style="background:var(--card);border:1px solid var(--border);color:var(--accent);padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px">BT Compare</a>
+    <a id="btCompareLink" href="/bt-compare" style="background:var(--card);border:1px solid var(--border);color:var(--accent);padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px">BT Compare</a>
     <a href="/tests" style="background:var(--card);border:1px solid var(--border);color:var(--accent);padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px">Tests</a>
   </div>
 </div>
@@ -496,15 +786,57 @@ public partial class TournamentRunner : Node
 <div id="content"></div>
 
 <script>
-const API = '';
+let currentTournament = 'default';
+let tournaments = [];
 let genCache = {}; // gen number -> {timestamp, ...}
 
 // Navigation state
 let nav = { view: 'home' };
 
+function apiBase() {
+  return currentTournament === 'default' ? '/api' : `/api/tournaments/${currentTournament}`;
+}
+
 async function api(path) {
-  const r = await fetch(API + path);
+  const r = await fetch(apiBase() + path);
   return r.json();
+}
+
+async function loadTournaments() {
+  const r = await fetch('/api/tournaments');
+  tournaments = await r.json();
+  const sel = document.getElementById('tournamentSelect');
+  sel.innerHTML = '';
+  tournaments.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.display_name + (t.generation_count > 0 ? ` (${t.generation_count} gens)` : '');
+    sel.appendChild(opt);
+  });
+  // Restore from URL hash or default
+  const params = new URLSearchParams(location.search);
+  if (params.has('tournament')) {
+    currentTournament = params.get('tournament');
+  }
+  sel.value = currentTournament;
+  updateBtCompareLink();
+}
+
+function switchTournament(tid) {
+  currentTournament = tid;
+  genCache = {};
+  updateBtCompareLink();
+  // Update URL
+  const url = new URL(location.href);
+  if (tid === 'default') url.searchParams.delete('tournament');
+  else url.searchParams.set('tournament', tid);
+  history.replaceState(null, '', url);
+  showHome();
+}
+
+function updateBtCompareLink() {
+  const link = document.getElementById('btCompareLink');
+  if (link) link.href = currentTournament === 'default' ? '/bt-compare' : `/bt-compare?tournament=${currentTournament}`;
 }
 
 function fmtTimestamp(ts) {
@@ -516,10 +848,11 @@ function fmtTimestamp(ts) {
 
 function getRelativePath() {
   const pad = n => String(n).padStart(3, '0');
-  if (nav.view === 'home') return 'generations';
-  if (nav.view === 'gen') return `generations/gen_${pad(nav.gen)}`;
-  if (nav.view === 'fighter') return `generations/gen_${pad(nav.gen)}/fighters/${nav.fighterId}_${nav.fighterName}`;
-  if (nav.view === 'battle') return `generations/gen_${pad(nav.gen)}/fighters/${nav.fighterId}_${nav.fighterName}/battles/${nav.matchFile || ''}`;
+  const base = currentTournament === 'default' ? 'generations' : `tournaments/${currentTournament}`;
+  if (nav.view === 'home') return base;
+  if (nav.view === 'gen') return `${base}/gen_${pad(nav.gen)}`;
+  if (nav.view === 'fighter') return `${base}/gen_${pad(nav.gen)}/fighters/${nav.fighterId}_${nav.fighterName}`;
+  if (nav.view === 'battle') return `${base}/gen_${pad(nav.gen)}/fighters/${nav.fighterId}_${nav.fighterName}/battles/${nav.matchFile || ''}`;
   return '';
 }
 
@@ -559,11 +892,12 @@ function renderBreadcrumb() {
   }).join('') + copyBtn;
 }
 
-async function showHome() {
+async function showHome(fromPop) {
   nav = { view: 'home' };
+  if (!fromPop) pushNav();
   renderBreadcrumb();
 
-  const gens = await api('/api/generations');
+  const gens = await api('/generations');
   const el = document.getElementById('content');
 
   const controls = `<div class="controls">
@@ -609,7 +943,10 @@ async function runTournament() {
   btn.disabled = true;
   status.textContent = 'Running tournament...';
   try {
-    const r = await fetch(API + '/api/tournament/run', { method: 'POST' });
+    const url = currentTournament === 'default'
+      ? '/api/tournament/run'
+      : `/api/tournaments/${currentTournament}/run`;
+    const r = await fetch(url, { method: 'POST' });
     const data = await r.json();
     if (data.error) { status.textContent = 'Error: ' + data.error; }
     else { status.textContent = `Gen ${data.generation} completed in ${data.elapsed_ms}ms`; }
@@ -618,13 +955,14 @@ async function runTournament() {
   btn.disabled = false;
 }
 
-async function showGeneration(gen) {
-  const genData = await api(`/api/generations/${gen}`);
+async function showGeneration(gen, fromPop) {
+  const genData = await api(`/generations/${gen}`);
   nav = { view: 'gen', gen, genTimestamp: genData.timestamp || genCache[gen] };
   genCache[gen] = nav.genTimestamp;
+  if (!fromPop) pushNav();
   renderBreadcrumb();
 
-  const fighters = await api(`/api/generations/${gen}/fighters`);
+  const fighters = await api(`/generations/${gen}/fighters`);
   const el = document.getElementById('content');
   el.innerHTML = fighters.map(f => `
     <div class="card clickable" onclick="showFighter(${gen}, '${f.fighter_id}', '${f.name}')">
@@ -637,49 +975,77 @@ async function showGeneration(gen) {
         <span class="metric"><span>Win Rate:</span> ${(f.win_rate*100).toFixed(0)}%</span>
       </div>
       <div style="margin-top:6px">
-        <span class="metric"><span>Avg Dmg Dealt:</span> ${f.aggregate_metrics.avg_damage_dealt.toFixed(1)}</span>
-        <span class="metric"><span>Avg Dmg Taken:</span> ${f.aggregate_metrics.avg_damage_received.toFixed(1)}</span>
-        <span class="metric"><span>Hit Accuracy:</span> ${(f.aggregate_metrics.avg_hit_accuracy*100).toFixed(0)}%</span>
-        <span class="metric"><span>KOs:</span> ${f.aggregate_metrics.total_knockouts}</span>
+        ${f.aggregate_metrics.avg_damage_dealt != null ? `
+          <span class="metric"><span>Avg Dmg Dealt:</span> ${f.aggregate_metrics.avg_damage_dealt.toFixed(1)}</span>
+          <span class="metric"><span>Avg Dmg Taken:</span> ${f.aggregate_metrics.avg_damage_received.toFixed(1)}</span>
+          <span class="metric"><span>Hit Accuracy:</span> ${(f.aggregate_metrics.avg_hit_accuracy*100).toFixed(0)}%</span>
+          <span class="metric"><span>KOs:</span> ${f.aggregate_metrics.total_knockouts}</span>
+        ` : `
+          <span class="metric"><span>Avg Score Diff:</span> ${(f.aggregate_metrics.avg_score_diff || 0).toFixed(1)}</span>
+          <span class="metric"><span>Beacon Own%:</span> ${((f.aggregate_metrics.avg_beacon_ownership_pct || 0)*100).toFixed(0)}%</span>
+          <span class="metric"><span>Avg Pulse:</span> ${(f.aggregate_metrics.avg_pulse_count || 0).toFixed(1)}</span>
+          <span class="metric"><span>Score Wins:</span> ${f.aggregate_metrics.total_score_victories || 0}</span>
+        `}
       </div>
     </div>
   `).join('');
 }
 
-async function showFighter(gen, fighterId, fighterName) {
+async function showFighter(gen, fighterId, fighterName, fromPop) {
   if (!fighterName) {
-    const fighters = await api(`/api/generations/${gen}/fighters`);
+    const fighters = await api(`/generations/${gen}/fighters`);
     const f = fighters.find(f => f.fighter_id === fighterId);
     fighterName = f ? f.name : fighterId;
   }
   nav = { ...nav, view: 'fighter', gen, fighterId, fighterName };
   if (!nav.genTimestamp) nav.genTimestamp = genCache[gen];
+  if (!fromPop) pushNav();
   renderBreadcrumb();
 
-  const battles = await api(`/api/generations/${gen}/fighters/${fighterId}/battles`);
+  const battles = await api(`/generations/${gen}/fighters/${fighterId}/battles`);
+  // Store battles for detail drill-down
+  window._cachedBattles = battles;
+
+  const wins = battles.filter(b => b.result === 'win').length;
+  const losses = battles.filter(b => b.result === 'loss').length;
+  const draws = battles.filter(b => b.result === 'draw').length;
+
   const el = document.getElementById('content');
-  el.innerHTML = battles.map((b, i) => `
-    <div class="card clickable" onclick='showBattle(${JSON.stringify(b).replace(/'/g, "\\u0027")}, "${fighterId}")'>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h2>vs ${b.opponent}</h2>
-        <div>
-          <a href="/replay?gen=${gen}&fighter=${fighterId}&match=${b.match_id}" target="_blank" onclick="event.stopPropagation()" style="background:var(--accent);color:#fff;padding:4px 12px;border-radius:4px;text-decoration:none;font-size:13px;margin-right:8px">Watch</a>
-          <span class="${b.result}" style="font-weight:700;font-size:18px">${b.result.toUpperCase()}</span>
-        </div>
+  el.innerHTML = `
+    <details class="rounds-foldout" open>
+      <summary>Round Pairings (${battles.length} matches — <span class="win">${wins}W</span> <span class="loss">${losses}L</span> <span class="draw">${draws}D</span>)</summary>
+      <div class="rounds-body">
+        ${battles.map((b, i) => `
+          <div class="round-row" onclick='showBattleByIndex(${i}, "${fighterId}")'>
+            <div>
+              <span style="color:var(--dim);min-width:24px;display:inline-block">${i+1}.</span>
+              vs <strong>${b.opponent}</strong>
+              ${b.final_state ? `
+                <span style="color:var(--dim);margin-left:12px">${b.duration_seconds.toFixed(1)}s — HP ${b.final_state.fighter_hp.toFixed(0)} vs ${b.final_state.opponent_hp.toFixed(0)}</span>
+              ` : `
+                <span style="color:var(--dim);margin-left:12px">${b.duration_seconds.toFixed(1)}s — ${(b.final_scores||[0,0])[0]}-${(b.final_scores||[0,0])[1]}</span>
+              `}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <a href="/replay?gen=${gen}&fighter=${fighterId}&match=${b.match_id}${currentTournament !== 'default' ? '&tournament=' + currentTournament : ''}" target="_blank" onclick="event.stopPropagation()" style="background:var(--accent);color:#fff;padding:2px 10px;border-radius:4px;text-decoration:none;font-size:12px">Watch</a>
+              <span class="${b.result}" style="font-weight:700">${b.result.toUpperCase()}</span>
+            </div>
+          </div>
+        `).join('')}
       </div>
-      <div>
-        <span class="metric"><span>Duration:</span> ${b.duration_seconds.toFixed(1)}s</span>
-        <span class="metric"><span>HP:</span> ${b.final_state.fighter_hp.toFixed(0)} vs ${b.final_state.opponent_hp.toFixed(0)}</span>
-        <span class="metric"><span>Hits:</span> ${b.damage_summary.hits_landed} landed / ${b.damage_summary.hits_taken} taken</span>
-        <span class="metric"><span>Accuracy:</span> ${(b.damage_summary.hit_accuracy*100).toFixed(0)}%</span>
-      </div>
-    </div>
-  `).join('');
+    </details>
+  `;
+}
+
+function showBattleByIndex(idx, fighterId) {
+  const b = window._cachedBattles[idx];
+  if (b) showBattle(b, fighterId);
 }
 
 function showBattle(b, fighterId) {
   if (fighterId) nav.fighterId = fighterId;
   nav = { ...nav, view: 'battle', opponentName: b.opponent, matchId: b.match_id, matchFile: b._filename || '' };
+  pushNav();
   renderBreadcrumb();
 
   const el = document.getElementById('content');
@@ -688,7 +1054,7 @@ function showBattle(b, fighterId) {
 
   el.innerHTML = `
     <div style="margin-bottom:12px">
-      <a href="/replay?gen=${nav.gen}&fighter=${nav.fighterId}&match=${b.match_id}" target="_blank" style="background:var(--accent);color:#fff;padding:6px 16px;border-radius:4px;text-decoration:none;font-size:14px;font-weight:600">Watch Replay</a>
+      <a href="/replay?gen=${nav.gen}&fighter=${nav.fighterId}&match=${b.match_id}${currentTournament !== 'default' ? '&tournament=' + currentTournament : ''}" target="_blank" style="background:var(--accent);color:#fff;padding:6px 16px;border-radius:4px;text-decoration:none;font-size:14px;font-weight:600">Watch Replay</a>
       <span style="margin-left:12px;font-size:18px" class="${b.result}"><strong>${b.result.toUpperCase()}</strong></span>
       <span class="subtitle" style="margin-left:8px">${b.duration_seconds.toFixed(1)}s</span>
     </div>
@@ -696,23 +1062,35 @@ function showBattle(b, fighterId) {
     <div class="card">
       <h2>Final State</h2>
       <div>
-        <span class="metric"><span>Fighter HP:</span> ${b.final_state.fighter_hp.toFixed(0)}/100</span>
-        <span class="metric"><span>Opponent HP:</span> ${b.final_state.opponent_hp.toFixed(0)}/100</span>
-        <span class="metric"><span>Dmg Dealt:</span> ${b.damage_summary.dealt.toFixed(0)}</span>
-        <span class="metric"><span>Dmg Received:</span> ${b.damage_summary.received.toFixed(0)}</span>
+        ${b.final_state ? `
+          <span class="metric"><span>Fighter HP:</span> ${b.final_state.fighter_hp.toFixed(0)}/100</span>
+          <span class="metric"><span>Opponent HP:</span> ${b.final_state.opponent_hp.toFixed(0)}/100</span>
+          <span class="metric"><span>Dmg Dealt:</span> ${b.damage_summary.dealt.toFixed(0)}</span>
+          <span class="metric"><span>Dmg Received:</span> ${b.damage_summary.received.toFixed(0)}</span>
+        ` : `
+          <span class="metric"><span>Final Score:</span> ${(b.final_scores||[0,0])[0]} - ${(b.final_scores||[0,0])[1]}</span>
+          <span class="metric"><span>Beacon Own%:</span> ${((b.beacon_control?.total_beacon_ownership_pct||0)*100).toFixed(0)}%</span>
+          <span class="metric"><span>Captures:</span> ${b.beacon_control?.capture_count || 0}</span>
+          <span class="metric"><span>Pulses:</span> ${b.pulse_stats?.pulse_count || 0}</span>
+        `}
       </div>
     </div>
 
     <div class="card">
       <h2>Positional Summary</h2>
       <div>
-        <span class="metric"><span>Grounded:</span> ${(b.positional_summary.time_grounded_pct*100).toFixed(0)}%</span>
-        <span class="metric"><span>Airborne:</span> ${(b.positional_summary.time_airborne_pct*100).toFixed(0)}%</span>
-        <span class="metric"><span>Near Opponent:</span> ${(b.positional_summary.time_near_opponent_pct*100).toFixed(0)}%</span>
-        <span class="metric"><span>Avg Distance:</span> ${b.positional_summary.avg_distance_to_opponent.toFixed(0)}px</span>
+        <span class="metric"><span>Grounded:</span> ${((b.positional_summary?.time_grounded_pct||0)*100).toFixed(0)}%</span>
+        ${b.positional_summary?.time_airborne_pct != null ? `
+          <span class="metric"><span>Airborne:</span> ${(b.positional_summary.time_airborne_pct*100).toFixed(0)}%</span>
+          <span class="metric"><span>Near Opponent:</span> ${(b.positional_summary.time_near_opponent_pct*100).toFixed(0)}%</span>
+          <span class="metric"><span>Avg Distance:</span> ${b.positional_summary.avg_distance_to_opponent.toFixed(0)}px</span>
+        ` : `
+          <span class="metric"><span>On Platform:</span> ${((b.positional_summary?.time_on_platform_pct||0)*100).toFixed(0)}%</span>
+        `}
       </div>
     </div>
 
+    ${b.grapple_stats ? `
     <div class="card">
       <h2>Grapple Stats</h2>
       <div>
@@ -722,6 +1100,29 @@ function showBattle(b, fighterId) {
         <span class="metric"><span>Avg Duration:</span> ${b.grapple_stats.avg_attached_duration_ticks.toFixed(0)} ticks</span>
       </div>
     </div>
+    ` : ''}
+
+    ${b.beacon_control ? `
+    <div class="card">
+      <h2>Beacon Control</h2>
+      <div>
+        <span class="metric"><span>Left Owned:</span> ${((b.beacon_control.time_owning_left_pct||0)*100).toFixed(0)}%</span>
+        <span class="metric"><span>Center Owned:</span> ${((b.beacon_control.time_owning_center_pct||0)*100).toFixed(0)}%</span>
+        <span class="metric"><span>Right Owned:</span> ${((b.beacon_control.time_owning_right_pct||0)*100).toFixed(0)}%</span>
+        <span class="metric"><span>Captures:</span> ${b.beacon_control.capture_count || 0}</span>
+      </div>
+    </div>
+    ` : ''}
+
+    ${b.pulse_stats ? `
+    <div class="card">
+      <h2>Pulse Stats</h2>
+      <div>
+        <span class="metric"><span>Pulses Used:</span> ${b.pulse_stats.pulse_count}</span>
+        <span class="metric"><span>Times Stunned:</span> ${b.pulse_stats.times_stunned}</span>
+      </div>
+    </div>
+    ` : ''}
 
     <div class="card">
       <h2>Action Frequency</h2>
@@ -735,10 +1136,11 @@ function showBattle(b, fighterId) {
       `).join('')}
     </div>
 
+    ${(b.phase_breakdown||[]).length > 0 ? `
     <div class="card">
       <h2>Phase Breakdown</h2>
       <div class="phase-grid">
-        ${(b.phase_breakdown||[]).map(p => `
+        ${b.phase_breakdown.map(p => `
           <div class="phase-card">
             <h4>${p.phase} (tick ${p.tick_range[0]}–${p.tick_range[1]})</h4>
             <div><span class="metric win"><span>Dealt:</span> ${p.damage_dealt.toFixed(0)}</span></div>
@@ -748,6 +1150,7 @@ function showBattle(b, fighterId) {
         `).join('')}
       </div>
     </div>
+    ` : ''}
 
     <div class="card">
       <h2>Key Moments</h2>
@@ -760,10 +1163,11 @@ function showBattle(b, fighterId) {
       `).join('')}
     </div>
 
+    ${(b.hit_log||[]).length > 0 ? `
     <div class="card">
-      <h2>Hit Log (${(b.hit_log||[]).length} hits)</h2>
+      <h2>Hit Log (${b.hit_log.length} hits)</h2>
       <div class="hit-timeline">
-        ${(b.hit_log||[]).map(h => `
+        ${b.hit_log.map(h => `
           <div class="hit-row">
             <span><span class="${h.attacker==='fighter'?'win':'loss'}" style="font-weight:600">${h.attacker}</span> ${h.hand} fist</span>
             <span style="color:var(--dim)">tick ${h.tick} — ${h.damage} dmg</span>
@@ -771,10 +1175,43 @@ function showBattle(b, fighterId) {
         `).join('')}
       </div>
     </div>
+    ` : ''}
   `;
 }
 
-showHome();
+// ── URL hash navigation ──
+function pushNav() {
+  const h = new URLSearchParams();
+  if (nav.view !== 'home') h.set('view', nav.view);
+  if (nav.gen != null) h.set('gen', nav.gen);
+  if (nav.fighterId) h.set('fighter', nav.fighterId);
+  if (nav.fighterName) h.set('fname', nav.fighterName);
+  if (nav.matchId) h.set('match', nav.matchId);
+  if (nav.opponentName) h.set('opp', nav.opponentName);
+  const hash = h.toString();
+  const newUrl = hash ? '#' + hash : location.pathname + location.search;
+  if (location.hash.slice(1) !== hash) history.pushState(null, '', newUrl);
+}
+
+async function restoreFromHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const view = h.get('view') || 'home';
+  const gen = h.get('gen');
+  const fighter = h.get('fighter');
+  const fname = h.get('fname');
+  // For battle view, restore to fighter page (we can't serialize the full battle object in hash)
+  if ((view === 'fighter' || view === 'battle') && gen && fighter) {
+    await showFighter(parseInt(gen), fighter, fname || undefined, true);
+  } else if (view === 'gen' && gen) {
+    await showGeneration(parseInt(gen), true);
+  } else {
+    await showHome(true);
+  }
+}
+
+window.addEventListener('popstate', () => restoreFromHash());
+
+loadTournaments().then(() => restoreFromHash());
 </script>
 </body>
 </html>
@@ -1103,10 +1540,12 @@ loadCached();
   .breadcrumb .current { color: var(--text); font-weight: 600; }
   .copy-path { margin-left: 10px; background: var(--card); border: 1px solid var(--border); color: var(--dim); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: monospace; white-space: nowrap; }
   .copy-path:hover { color: var(--accent); border-color: var(--accent); }
+  .match-id { display: inline-block; margin-top: 4px; padding: 3px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; font-family: 'Consolas', 'Fira Code', monospace; font-size: 13px; color: var(--accent); user-select: all; -webkit-user-select: all; cursor: text; letter-spacing: 0.3px; }
 </style>
 </head>
 <body>
 <div id="breadcrumb" class="breadcrumb"></div>
+<span class="match-id" id="matchIdLabel"></span>
 <p class="subtitle" id="matchInfo">Loading...</p>
 <canvas id="arena" width="1500" height="680"></canvas>
 <div class="controls">
@@ -1115,16 +1554,17 @@ loadCached();
   <button class="speed-btn active" onclick="setSpeed(1)">1x</button>
   <button class="speed-btn" onclick="setSpeed(2)">2x</button>
   <button class="speed-btn" onclick="setSpeed(4)">4x</button>
+  <button id="launchGodotBtn" style="background:#3fb950;margin-left:8px" onclick="launchInGodot()">Launch in Godot</button>
   <input type="range" id="scrubber" min="0" max="100" value="0" oninput="scrub(this.value)">
   <span class="info" id="tickInfo">0 / 0</span>
 </div>
 <div class="hud">
   <div class="hud-fighter">
-    <div><span style="color:#f85149;font-weight:700" id="name0">Fighter 0</span> <span id="hp0text">100</span> HP</div>
+    <div><span style="color:#f85149;font-weight:700" id="name0">Fighter 0</span> <span id="hp0text">100</span> <span id="unit0">HP</span></div>
     <div class="hp-bar"><div class="hp-fill" id="hp0bar" style="width:100%;background:var(--green)"></div></div>
   </div>
   <div class="hud-fighter" style="text-align:right">
-    <div><span style="color:#58a6ff;font-weight:700" id="name1">Fighter 1</span> <span id="hp1text">100</span> HP</div>
+    <div><span style="color:#58a6ff;font-weight:700" id="name1">Fighter 1</span> <span id="hp1text">100</span> <span id="unit1">HP</span></div>
     <div class="hp-bar"><div class="hp-fill" id="hp1bar" style="width:100%;background:var(--green)"></div></div>
   </div>
 </div>
@@ -1137,6 +1577,8 @@ const params = new URLSearchParams(location.search);
 const gen = params.get('gen');
 const fighter = params.get('fighter');
 const matchId = params.get('match');
+const tournament = params.get('tournament') || 'default';
+const apiPrefix = tournament === 'default' ? '/api' : `/api/tournaments/${tournament}`;
 
 let data = null; // full battle log with replay
 let replay = null;
@@ -1146,6 +1588,10 @@ let currentTick = 0;
 let maxTick = 0;
 let lastFrameTime = null;
 let hitFlashes = []; // [{tick, x, y, ttl}]
+let isBeaconBrawl = false;
+let teamColors = []; // per-pawn colors for beacon brawl
+let rifleShots = []; // [{tk, pi, sg, h, hp}] — rifle shot events from replay data
+let hitEvents = [];  // [{tk, pi}] — pawn hit events for flash rendering
 
 // Colors (defaults, overridden by fighter_color/opponent_color from battle log)
 let F0_COLOR = '#f85149';
@@ -1158,7 +1604,7 @@ const FLOOR_COLOR = '#444';
 
 async function findFighterDir(gen, fighterId) {
   try {
-    const fighters = await (await fetch(`/api/generations/${gen}/fighters`)).json();
+    const fighters = await (await fetch(`${apiPrefix}/generations/${gen}/fighters`)).json();
     const f = fighters.find(f => f.fighter_id === fighterId);
     return f ? `${fighterId}_${f.name}` : fighterId;
   } catch { return fighterId; }
@@ -1172,7 +1618,7 @@ async function load() {
 
   try {
     // Find the battle file
-    const battles = await (await fetch(`/api/generations/${gen}/fighters/${fighter}/battles`)).json();
+    const battles = await (await fetch(`${apiPrefix}/generations/${gen}/fighters/${fighter}/battles`)).json();
     const battle = battles.find(b => b.match_id === matchId);
     if (!battle) { document.getElementById('error').textContent = 'Battle not found'; return; }
     if (!battle.replay) { document.getElementById('error').textContent = 'No replay data in this battle log (re-run tournament)'; return; }
@@ -1180,33 +1626,62 @@ async function load() {
     data = battle;
     replay = battle.replay;
     maxTick = battle.duration_ticks;
+    rifleShots = replay.rifle_shots || [];
+    hitEvents = replay.hit_events || [];
 
-    // Apply fighter colors from battle log
-    if (battle.fighter_color) F0_COLOR = battle.fighter_color;
+    // Detect beacon brawl: checkpoints have 'p' (pawns) array instead of fighters in 'f'
+    isBeaconBrawl = replay.checkpoints.length > 0 && replay.checkpoints[0].p != null;
+
+    // Apply fighter/team colors from battle log
+    if (battle.fighter_color || battle.team_color) F0_COLOR = battle.fighter_color || battle.team_color;
     if (battle.opponent_color) F1_COLOR = battle.opponent_color;
 
-    document.getElementById('matchInfo').textContent = `${battle.fighter} vs ${battle.opponent} — ${battle.result.toUpperCase()} in ${battle.duration_seconds.toFixed(1)}s`;
+    // Build per-pawn color array for beacon brawl
+    if (isBeaconBrawl && replay.checkpoints.length > 0) {
+      const cp = replay.checkpoints[0];
+      teamColors = cp.p.map(p => p.t === 0 ? F0_COLOR : F1_COLOR);
+    }
+
+    const teamName = battle.fighter || battle.team || 'Team A';
+    const oppName = battle.opponent || 'Team B';
+    const scoreStr = battle.final_scores ? ` (${battle.final_scores[0]}-${battle.final_scores[1]})` : '';
+    document.getElementById('matchInfo').textContent = `${teamName} vs ${oppName} — ${battle.result.toUpperCase()} in ${battle.duration_seconds.toFixed(1)}s${scoreStr}`;
 
     // Build relative file path for copy button
     const pad = n => String(n).padStart(3, '0');
     const fighterDir = await findFighterDir(gen, fighter);
     const filename = battle._filename || '';
+    const base = tournament === 'default' ? 'generations' : `tournaments/${tournament}`;
     const relPath = filename
-      ? `generations/gen_${pad(parseInt(gen))}/fighters/${fighterDir}/battles/${filename}`
-      : `generations/gen_${pad(parseInt(gen))}/fighters/${fighterDir}/battles`;
+      ? `${base}/gen_${pad(parseInt(gen))}/fighters/${fighterDir}/battles/${filename}`
+      : `${base}/gen_${pad(parseInt(gen))}/fighters/${fighterDir}/battles`;
 
     // Breadcrumb
     const bc = document.getElementById('breadcrumb');
-    bc.innerHTML = `<a href="/">Tournaments</a><span class="sep">&gt;</span>`
-      + `<a href="/#gen=${gen}">Gen_${gen}</a><span class="sep">&gt;</span>`
-      + `<a href="/#gen=${gen}&fighter=${fighter}">${battle.fighter}</a><span class="sep">&gt;</span>`
+    const tq = tournament !== 'default' ? `?tournament=${tournament}` : '';
+    bc.innerHTML = `<a href="/${tq}">Tournaments</a><span class="sep">&gt;</span>`
+      + `<a href="/${tq}#gen=${gen}">Gen_${gen}</a><span class="sep">&gt;</span>`
+      + `<a href="/${tq}#gen=${gen}&fighter=${fighter}">${battle.fighter}</a><span class="sep">&gt;</span>`
       + `<span>vs ${battle.opponent}</span><span class="sep">&gt;</span>`
       + `<span class="current">Replay</span>`
       + `<button class="copy-path" title="${relPath}" onclick="(() => { navigator.clipboard.writeText('${relPath}'); this.textContent='copied!'; setTimeout(() => this.textContent='${relPath}', 1200); })()">${relPath}</button>`;
-    document.getElementById('name0').textContent = battle.fighter;
+    // Build selectable match ID label
+    const tAbbrev = tournament === 'beacon_brawl' ? 'bb' : tournament === 'default' ? 'df' : tournament.replace(/[^a-z0-9]/gi, '').substring(0, 6);
+    const colorOf = s => (s || '').toLowerCase().split(/[_ ]/)[0];
+    const matchNum = (matchId || '').replace(/.*match[_]?0*(\d+).*/i, '$1') || matchId;
+    const matchIdLabel = `${tAbbrev}.gen_${gen}.${colorOf(teamName)}.${colorOf(oppName)}.match${matchNum}`;
+    document.getElementById('matchIdLabel').textContent = matchIdLabel;
+
+    document.getElementById('name0').textContent = teamName;
     document.getElementById('name0').style.color = F0_COLOR;
-    document.getElementById('name1').textContent = battle.opponent;
+    document.getElementById('name1').textContent = oppName;
     document.getElementById('name1').style.color = F1_COLOR;
+    if (isBeaconBrawl) {
+      document.getElementById('unit0').textContent = 'pts';
+      document.getElementById('unit1').textContent = 'pts';
+      document.getElementById('hp0text').textContent = '0';
+      document.getElementById('hp1text').textContent = '0';
+    }
     document.getElementById('scrubber').max = maxTick;
 
     // Scale arena to fit canvas (max 1500px wide)
@@ -1231,14 +1706,22 @@ function getState(tick) {
   const hi = Math.ceil(idx);
   const cpLen = replay.checkpoints.length;
 
-  if (lo >= cpLen - 1) return replay.checkpoints[cpLen - 1];
-  if (hi >= cpLen) return replay.checkpoints[cpLen - 1];
+  if (lo >= cpLen - 1) return isBeaconBrawl ? normalizeBB(replay.checkpoints[cpLen - 1]) : normalizeFight(replay.checkpoints[cpLen - 1]);
+  if (hi >= cpLen) return isBeaconBrawl ? normalizeBB(replay.checkpoints[cpLen - 1]) : normalizeFight(replay.checkpoints[cpLen - 1]);
 
   const a = replay.checkpoints[lo];
   const b = replay.checkpoints[hi];
   const frac = idx - lo;
 
-  // Interpolate
+  if (isBeaconBrawl) return interpolateBB(a, b, frac, tick);
+  return interpolateFight(a, b, frac, tick);
+}
+
+function normalizeFight(cp) {
+  return { t: cp.t, f: cp.f, fists: cp.fists };
+}
+
+function interpolateFight(a, b, frac, tick) {
   return {
     t: tick,
     f: [0, 1].map(i => ({
@@ -1261,7 +1744,322 @@ function getState(tick) {
   };
 }
 
+function normalizeBB(cp) {
+  return {
+    t: cp.t, scores: cp.s, beacons: cp.b,
+    pawns: cp.p,
+    fists: cp.f.map(fi => ({...fi})),
+    projectiles: cp.pr || []
+  };
+}
+
+function interpolateBB(a, b, frac, tick) {
+  return {
+    t: tick,
+    scores: frac < 0.5 ? a.s : b.s,
+    beacons: frac < 0.5 ? a.b : b.b,
+    pawns: a.p.map((pa, i) => ({
+      t: pa.t,
+      r: pa.r,   // role: 0=Grappler, 1=Gunner
+      x: lerp(pa.x, b.p[i].x, frac),
+      y: lerp(pa.y, b.p[i].y, frac),
+      vx: lerp(pa.vx, b.p[i].vx, frac),
+      vy: lerp(pa.vy, b.p[i].vy, frac),
+      hp: lerp(pa.hp, b.p[i].hp, frac),
+      g:  frac < 0.5 ? pa.g  : b.p[i].g,
+      d:  frac < 0.5 ? pa.d  : b.p[i].d,
+      v:  frac < 0.5 ? pa.v  : b.p[i].v,
+      pa: frac < 0.5 ? pa.pa : b.p[i].pa,
+      wl: frac < 0.5 ? pa.wl : b.p[i].wl
+    })),
+    fists: a.f.map((fa, i) => ({
+      pi: fa.pi,  // pawn owner index in AllPawns — constant, don't interpolate
+      s:  frac < 0.5 ? fa.s : b.f[i].s,
+      x:  lerp(fa.x, b.f[i].x, frac),
+      y:  lerp(fa.y, b.f[i].y, frac),
+      ax: fa.a ? fa.ax : b.f[i].ax,
+      ay: fa.a ? fa.ay : b.f[i].ay,
+      cl: lerp(fa.cl, b.f[i].cl, frac),
+      a:  frac < 0.5 ? fa.a : b.f[i].a
+    })),
+    projectiles: frac < 0.5 ? (a.pr || []) : (b.pr || [])
+  };
+}
+
 function lerp(a, b, t) { return a + (b - a) * t; }
+
+function drawFight(state, w, h, vs) {
+  const fighterColors = [F0_COLOR, F1_COLOR];
+  for (let fi = 0; fi < 4; fi++) {
+    const fist = state.fists[fi];
+    const ownerIdx = fi < 2 ? 0 : 1;
+    const owner = state.f[ownerIdx];
+    if (fist.s === 0) continue;
+    ctx.strokeStyle = CHAIN_COLORS[fist.s] || '#666';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(owner.x, owner.y); ctx.lineTo(fist.x, fist.y); ctx.stroke();
+    if (fist.a) {
+      ctx.fillStyle = ANCHOR_COLOR;
+      ctx.beginPath();
+      const ax = fist.ax, ay = fist.ay, sz = 5;
+      ctx.moveTo(ax, ay - sz); ctx.lineTo(ax + sz, ay); ctx.lineTo(ax, ay + sz); ctx.lineTo(ax - sz, ay); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = FIST_COLORS[fist.s] || '#888';
+    ctx.beginPath(); ctx.arc(fist.x, fist.y, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = fighterColors[ownerIdx]; ctx.lineWidth = 1; ctx.stroke();
+  }
+  for (let i = 0; i < 2; i++) {
+    const f = state.f[i];
+    ctx.fillStyle = fighterColors[i]; ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.arc(f.x, f.y, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = fighterColors[i]; ctx.lineWidth = 2; ctx.stroke();
+    const barW = 36, barH = 4, barY = f.y - 28;
+    ctx.fillStyle = '#333'; ctx.fillRect(f.x - barW/2, barY, barW, barH);
+    const hpPct = Math.max(0, f.hp / 100);
+    const hpColor = hpPct > 0.5 ? '#3fb950' : hpPct > 0.25 ? '#d29922' : '#f85149';
+    ctx.fillStyle = hpColor; ctx.fillRect(f.x - barW/2, barY, barW * hpPct, barH);
+  }
+  const activeHits = (data.hit_log || []).filter(h => Math.abs(h.tick - currentTick) < 8);
+  for (const h of activeHits) {
+    const age = Math.abs(currentTick - h.tick); const alpha = 1 - age / 8;
+    const pos = h.attacker === 'fighter' ? h.opponent_pos : h.fighter_pos;
+    ctx.fillStyle = `rgba(255, 255, 100, ${alpha * 0.6})`;
+    ctx.beginPath(); ctx.arc(pos[0], pos[1], 24 - age * 2, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawBeaconBrawl(state, w, h, vs) {
+  const ar = replay.arena;
+  const RIFLE_SHOW_TICKS = 14;
+  const HIT_FLASH_TICKS = 8;
+  const BEACON_COLORS = { 0: '#555', 1: F0_COLOR, 2: F1_COLOR };
+
+  // Platform
+  if (ar.platform_rect) {
+    const [px, py, pw, ph] = ar.platform_rect;
+    ctx.fillStyle = '#2a3040';
+    ctx.fillRect(px, py, pw, ph);
+    ctx.strokeStyle = '#4a5568'; ctx.lineWidth = 2; ctx.strokeRect(px, py, pw, ph);
+  }
+
+  // Beacon zones
+  if (state.beacons && ar.beacon_centers) {
+    for (let i = 0; i < state.beacons.length; i++) {
+      const bc = ar.beacon_centers[i];
+      const bs = state.beacons[i];
+      const bx = bc[0], by = bc[1], br = 80;
+
+      ctx.globalAlpha = 0.12;
+      ctx.fillStyle = BEACON_COLORS[bs.o] || '#555';
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+
+      ctx.strokeStyle = BEACON_COLORS[bs.o] || '#555';
+      ctx.lineWidth = 2; ctx.globalAlpha = 0.6;
+      ctx.setLineDash([8, 6]);
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+
+      if (bs.cp > 0) {
+        const progress = bs.cp / 90;
+        ctx.strokeStyle = BEACON_COLORS[bs.o === 0 ? 1 : bs.o] || '#ffd700';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(bx, by, br + 4, -Math.PI/2, -Math.PI/2 + progress * Math.PI * 2); ctx.stroke();
+      }
+
+      if (bs.ct) {
+        ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2; ctx.globalAlpha = 0.7;
+        ctx.beginPath(); ctx.moveTo(bx - 8, by - 8); ctx.lineTo(bx + 8, by + 8); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(bx + 8, by - 8); ctx.lineTo(bx - 8, by + 8); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      const mult = ar.beacon_multipliers ? ar.beacon_multipliers[i] : (i === 1 ? 3 : 1);
+      if (mult > 1) {
+        ctx.fillStyle = '#ffd70088'; ctx.font = `${11/vs}px monospace`;
+        ctx.fillText(`${mult}x`, bx - 8, by - br - 6);
+      }
+    }
+  }
+
+  // Rifle shot paths (dotted lines — drawn under pawns)
+  for (const shot of rifleShots) {
+    const age = currentTick - shot.tk;
+    if (age < 0 || age >= RIFLE_SHOW_TICKS) continue;
+    const alpha = 1 - age / RIFLE_SHOW_TICKS;
+    const segs = shot.sg || [];
+    if (segs.length < 2) continue;
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#ffd700';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    for (let si = 0; si < segs.length - 1; si++) {
+      ctx.moveTo(segs[si][0], segs[si][1]);
+      ctx.lineTo(segs[si+1][0], segs[si+1][1]);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (shot.h) {
+      const last = segs[segs.length - 1];
+      ctx.fillStyle = '#ff8800';
+      ctx.beginPath(); ctx.arc(last[0], last[1], 4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Grappling hooks / tethers
+  for (let fi = 0; fi < state.fists.length; fi++) {
+    const fist = state.fists[fi];
+    const ownerIdx = fist.pi !== undefined ? fist.pi : Math.floor(fi / 2);
+    if (ownerIdx >= state.pawns.length) continue;
+    const owner = state.pawns[ownerIdx];
+    if (fist.s === 0) continue;
+
+    ctx.strokeStyle = CHAIN_COLORS[fist.s] || '#666'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(owner.x, owner.y); ctx.lineTo(fist.x, fist.y); ctx.stroke();
+
+    if (fist.a) {
+      ctx.fillStyle = ANCHOR_COLOR;
+      const ax = fist.ax, ay = fist.ay, sz = 5;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay - sz); ctx.lineTo(ax + sz, ay); ctx.lineTo(ax, ay + sz); ctx.lineTo(ax - sz, ay);
+      ctx.closePath(); ctx.fill();
+    }
+
+    ctx.fillStyle = FIST_COLORS[fist.s] || '#888';
+    ctx.beginPath(); ctx.arc(fist.x, fist.y, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = teamColors[ownerIdx] || '#888'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Projectiles (pistol bullets)
+  for (const proj of (state.projectiles || [])) {
+    const pcolor = proj.t === 0 ? F0_COLOR : F1_COLOR;
+    ctx.fillStyle = pcolor; ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.arc(proj.x, proj.y, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#ffffff44'; ctx.lineWidth = 1; ctx.stroke();
+  }
+
+  // Pawns
+  for (let i = 0; i < state.pawns.length; i++) {
+    const p = state.pawns[i];
+    const color = teamColors[i] || (p.t === 0 ? F0_COLOR : F1_COLOR);
+    const isDead = !!p.d;
+
+    if (isDead) {
+      // Ghost: dashed translucent ring
+      ctx.globalAlpha = 0.2;
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.arc(p.x, p.y, 16, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      continue;
+    }
+
+    // Hit flash (white burst on recent hit)
+    let flashAlpha = 0;
+    for (let hi = hitEvents.length - 1; hi >= 0; hi--) {
+      const he = hitEvents[hi];
+      if (he.pi === i) {
+        const age = currentTick - he.tk;
+        if (age >= 0 && age < HIT_FLASH_TICKS) flashAlpha = 1 - age / HIT_FLASH_TICKS;
+        break;
+      }
+    }
+    if (flashAlpha > 0) {
+      ctx.fillStyle = `rgba(255,255,200,${flashAlpha * 0.65})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 22, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Debuff outlines (drawn before body so body appears on top)
+    ctx.globalAlpha = 0.85;
+    if (p.v) { // vulnerable — red ring
+      ctx.strokeStyle = '#ff4444'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 23, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (p.wl) { // weapon locked (parry lockout) — orange ring
+      ctx.strokeStyle = '#ff8800'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 25, 0, Math.PI * 2); ctx.stroke();
+    }
+    if (p.pa) { // parry active — bright cyan ring
+      ctx.strokeStyle = '#00ffee'; ctx.lineWidth = 2.5;
+      ctx.globalAlpha = 0.95;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 20, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Body
+    ctx.fillStyle = color; ctx.globalAlpha = 0.35;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+
+    // HP bar (above pawn)
+    const barW = 36, barH = 4, barY = p.y - 28;
+    const hpPct = Math.max(0, (p.hp || 0) / 100);
+    ctx.fillStyle = '#333'; ctx.fillRect(p.x - barW/2, barY, barW, barH);
+    ctx.fillStyle = hpPct > 0.5 ? '#3fb950' : hpPct > 0.25 ? '#d29922' : '#f85149';
+    ctx.fillRect(p.x - barW/2, barY, barW * hpPct, barH);
+
+    // Role indicator label (G / R)
+    ctx.fillStyle = color + 'cc'; ctx.font = `bold ${9/vs}px monospace`;
+    ctx.fillText(p.r === 0 ? 'G' : 'R', p.x - 4, p.y + 5);
+
+    // ── Role-specific weapon rendering ──
+
+    if (p.r === 0) {
+      // Grappler: fists at ready when hook is not extended
+      const hookEntry = state.fists.find(f => (f.pi !== undefined ? f.pi : -1) === i);
+      const hookRetracted = !hookEntry || hookEntry.s === 0;
+      if (hookRetracted) {
+        const facing = p.t === 0 ? 1 : -1;
+        const fistOffsets = [[-10 * facing - 8, 7], [-10 * facing + 8, 7]];
+        for (const [ox, oy] of fistOffsets) {
+          ctx.fillStyle = color; ctx.globalAlpha = 0.8;
+          ctx.beginPath(); ctx.arc(p.x + ox, p.y + oy, 4, 0, Math.PI * 2); ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = '#ffffff44'; ctx.lineWidth = 1; ctx.stroke();
+        }
+      }
+    } else {
+      // Gunner: rifle line (slung by default, pops to aim direction when fired)
+      // Find most recent rifle shot from this pawn
+      let rifleAngle = p.t === 0 ? 0.5 : Math.PI - 0.5; // slung: forward+down
+      let rifleActive = false;
+      for (let ri = rifleShots.length - 1; ri >= 0; ri--) {
+        const rs = rifleShots[ri];
+        if (rs.pi === i && rs.tk <= currentTick && currentTick - rs.tk < 20) {
+          const segs = rs.sg || [];
+          if (segs.length >= 2) {
+            rifleAngle = Math.atan2(segs[1][1] - segs[0][1], segs[1][0] - segs[0][0]);
+            rifleActive = (currentTick - rs.tk) < 10;
+          }
+          break;
+        }
+      }
+      const rLen = 18;
+      const rx = p.x + Math.cos(rifleAngle) * rLen;
+      const ry = p.y + Math.sin(rifleAngle) * rLen;
+      ctx.strokeStyle = rifleActive ? '#ffd700' : '#6a7a8a';
+      ctx.lineWidth = rifleActive ? 3 : 2;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(rx, ry); ctx.stroke();
+      ctx.fillStyle = rifleActive ? '#ffd700' : '#8a9aaa';
+      ctx.beginPath(); ctx.arc(rx, ry, 2.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // Scores on canvas
+  if (state.scores) {
+    ctx.fillStyle = F0_COLOR; ctx.font = `bold ${18/vs}px monospace`;
+    ctx.fillText(`${state.scores[0]}`, 30, 30);
+    ctx.fillStyle = '#8b949e'; ctx.fillText(' - ', 60, 30);
+    ctx.fillStyle = F1_COLOR; ctx.fillText(`${state.scores[1]}`, 90, 30);
+    ctx.fillStyle = '#555'; ctx.font = `${11/vs}px monospace`;
+    ctx.fillText(`/ ${data.final_scores ? Math.max(...data.final_scores) : 30}`, 120, 30);
+  }
+}
 
 function draw() {
   if (!replay) return;
@@ -1300,81 +2098,10 @@ function draw() {
   ctx.fillStyle = FLOOR_COLOR;
   ctx.fillRect(wt, h - wt, w - wt * 2, 2);
 
-  // Draw chains and fists
-  const fighterColors = [F0_COLOR, F1_COLOR];
-  for (let fi = 0; fi < 4; fi++) {
-    const fist = state.fists[fi];
-    const ownerIdx = fi < 2 ? 0 : 1;
-    const owner = state.f[ownerIdx];
-
-    if (fist.s === 0) continue; // retracted, skip
-
-    // Chain line
-    ctx.strokeStyle = CHAIN_COLORS[fist.s] || '#666';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(owner.x, owner.y);
-    ctx.lineTo(fist.x, fist.y);
-    ctx.stroke();
-
-    // Anchor point (if attached)
-    if (fist.a) {
-      ctx.fillStyle = ANCHOR_COLOR;
-      ctx.beginPath();
-      // Diamond shape
-      const ax = fist.ax, ay = fist.ay, sz = 5;
-      ctx.moveTo(ax, ay - sz);
-      ctx.lineTo(ax + sz, ay);
-      ctx.lineTo(ax, ay + sz);
-      ctx.lineTo(ax - sz, ay);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    // Fist circle
-    ctx.fillStyle = FIST_COLORS[fist.s] || '#888';
-    ctx.beginPath();
-    ctx.arc(fist.x, fist.y, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = fighterColors[ownerIdx];
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  // Draw fighters
-  for (let i = 0; i < 2; i++) {
-    const f = state.f[i];
-    // Body
-    ctx.fillStyle = fighterColors[i];
-    ctx.globalAlpha = 0.3;
-    ctx.beginPath();
-    ctx.arc(f.x, f.y, 18, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = fighterColors[i];
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // Health bar above
-    const barW = 36, barH = 4, barY = f.y - 28;
-    ctx.fillStyle = '#333';
-    ctx.fillRect(f.x - barW/2, barY, barW, barH);
-    const hpPct = Math.max(0, f.hp / 100);
-    const hpColor = hpPct > 0.5 ? '#3fb950' : hpPct > 0.25 ? '#d29922' : '#f85149';
-    ctx.fillStyle = hpColor;
-    ctx.fillRect(f.x - barW/2, barY, barW * hpPct, barH);
-  }
-
-  // Hit flashes
-  const activeHits = (data.hit_log || []).filter(h => Math.abs(h.tick - currentTick) < 8);
-  for (const h of activeHits) {
-    const age = Math.abs(currentTick - h.tick);
-    const alpha = 1 - age / 8;
-    const pos = h.attacker === 'fighter' ? h.opponent_pos : h.fighter_pos;
-    ctx.fillStyle = `rgba(255, 255, 100, ${alpha * 0.6})`;
-    ctx.beginPath();
-    ctx.arc(pos[0], pos[1], 24 - age * 2, 0, Math.PI * 2);
-    ctx.fill();
+  if (isBeaconBrawl) {
+    drawBeaconBrawl(state, w, h, vs);
+  } else {
+    drawFight(state, w, h, vs);
   }
 
   // Tick counter on canvas
@@ -1385,12 +2112,24 @@ function draw() {
   ctx.restore();
 
   // Update HUD
-  for (let i = 0; i < 2; i++) {
-    const hp = Math.max(0, state.f[i].hp);
-    document.getElementById(`hp${i}text`).textContent = hp.toFixed(0);
-    const bar = document.getElementById(`hp${i}bar`);
-    bar.style.width = hp + '%';
-    bar.style.background = hp > 50 ? 'var(--green)' : hp > 25 ? 'var(--yellow)' : 'var(--red)';
+  if (isBeaconBrawl && state.scores) {
+    document.getElementById('hp0text').textContent = state.scores[0];
+    document.getElementById('hp1text').textContent = state.scores[1];
+    const target = data.final_scores ? Math.max(...data.final_scores) : 30;
+    const bar0 = document.getElementById('hp0bar');
+    const bar1 = document.getElementById('hp1bar');
+    bar0.style.width = Math.min(100, state.scores[0] / target * 100) + '%';
+    bar0.style.background = 'var(--green)';
+    bar1.style.width = Math.min(100, state.scores[1] / target * 100) + '%';
+    bar1.style.background = 'var(--green)';
+  } else if (state.f) {
+    for (let i = 0; i < 2; i++) {
+      const hp = Math.max(0, state.f[i].hp);
+      document.getElementById(`hp${i}text`).textContent = hp.toFixed(0);
+      const bar = document.getElementById(`hp${i}bar`);
+      bar.style.width = hp + '%';
+      bar.style.background = hp > 50 ? 'var(--green)' : hp > 25 ? 'var(--yellow)' : 'var(--red)';
+    }
   }
   document.getElementById('tickInfo').textContent = `${Math.floor(currentTick)} / ${maxTick}`;
   document.getElementById('scrubber').value = currentTick;
@@ -1411,6 +2150,38 @@ function setSpeed(s) {
   document.querySelectorAll('.speed-btn').forEach(b => {
     b.classList.toggle('active', parseFloat(b.textContent) === s);
   });
+}
+
+async function launchInGodot() {
+  const btn = document.getElementById('launchGodotBtn');
+  btn.textContent = 'Launching...';
+  btn.disabled = true;
+  try {
+    // Use the actual filename from the loaded battle data, not the semantic match ID
+    const filename = (data && data._filename) ? data._filename.replace(/\.json$/, '') : matchId;
+    const dirName = await findFighterDir(gen, fighter);
+    const res = await fetch('/api/replay/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tournament, gen: `gen_${String(parseInt(gen)).padStart(3,'0')}`, fighter: dirName, match: filename })
+    });
+    const result = await res.json();
+    if (res.ok) {
+      btn.textContent = 'Launched!';
+      btn.style.background = '#3fb950';
+      setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; }, 3000);
+    } else {
+      btn.textContent = 'Error';
+      btn.style.background = '#f85149';
+      console.error(result.error);
+      setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = '#3fb950'; }, 3000);
+    }
+  } catch (e) {
+    btn.textContent = 'Failed';
+    btn.style.background = '#f85149';
+    console.error(e);
+    setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = '#3fb950'; }, 3000);
+  }
 }
 
 function scrub(val) {
@@ -1508,11 +2279,16 @@ load();
 </style>
 </head>
 <body>
-<div class="nav"><a href="/">Tournaments</a> | <strong>BT Compare</strong></div>
+<div class="nav"><a href="/" id="dashLink">Tournaments</a> | <strong>BT Compare</strong></div>
 <div class="header">
-  <div><h1>Behavior Tree Compare</h1><p class="subtitle">Side-by-side comparison of fighter behavior trees across generations</p></div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div><h1>Behavior Tree Compare</h1><p class="subtitle">Side-by-side comparison of fighter behavior trees across generations</p></div>
+    <select id="tournamentSelect" onchange="switchTournament(this.value)" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px;cursor:pointer;min-width:160px">
+      <option value="default">Loading...</option>
+    </select>
+  </div>
   <div style="display:flex;gap:8px">
-    <a href="/" class="link-btn">Dashboard</a>
+    <a href="/" id="dashLink2" class="link-btn">Dashboard</a>
     <a href="/tests" class="link-btn">Tests</a>
   </div>
 </div>
@@ -1551,9 +2327,47 @@ load();
 <script>
 let generations = [];
 let fighterCache = {}; // genId -> fighters array
+let currentTournament = 'default';
+
+function apiBase() {
+  return currentTournament === 'default' ? '/api' : `/api/tournaments/${currentTournament}`;
+}
+
+async function loadTournaments() {
+  const res = await fetch('/api/tournaments');
+  const tournaments = await res.json();
+  const sel = document.getElementById('tournamentSelect');
+  sel.innerHTML = '';
+  tournaments.forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.display_name + (t.generation_count > 0 ? ` (${t.generation_count} gens)` : '');
+    sel.appendChild(opt);
+  });
+  // Read from URL
+  const params = new URLSearchParams(location.search);
+  if (params.has('tournament')) currentTournament = params.get('tournament');
+  sel.value = currentTournament;
+  updateDashLinks();
+}
+
+function switchTournament(tid) {
+  currentTournament = tid;
+  fighterCache = {};
+  updateDashLinks();
+  loadGenerations();
+}
+
+function updateDashLinks() {
+  const tq = currentTournament !== 'default' ? `?tournament=${currentTournament}` : '';
+  const dl = document.getElementById('dashLink');
+  if (dl) dl.href = '/' + tq;
+  const dl2 = document.getElementById('dashLink2');
+  if (dl2) dl2.href = '/' + tq;
+}
 
 async function loadGenerations() {
-  const res = await fetch('/api/generations');
+  const res = await fetch(apiBase() + '/generations');
   generations = await res.json();
   for (const side of ['left', 'right']) {
     const sel = document.getElementById('gen-' + side);
@@ -1587,7 +2401,7 @@ async function onGenChange(side) {
 
   if (genIdx === 'sub-trees') {
     // Fetch subtree list
-    const stRes = await fetch('/api/generations/sub-trees/fighters');
+    const stRes = await fetch(apiBase() + '/generations/sub-trees/fighters');
     const subtrees = await stRes.json();
     subtrees.forEach(f => {
       const opt = document.createElement('option');
@@ -1621,7 +2435,7 @@ async function onFighterChange(side) {
   container.innerHTML = '<div class="empty-state">Loading...</div>';
 
   try {
-    const res = await fetch('/api/generations/' + genIdx + '/fighters/' + fighterId + '/bt');
+    const res = await fetch(apiBase() + '/generations/' + genIdx + '/fighters/' + fighterId + '/bt');
     if (!res.ok) throw new Error('BT not found');
     const bt = await res.json();
     renderTree(bt, container, side);
@@ -1724,7 +2538,7 @@ function buildNodeEl(node) {
     const stLink = document.createElement('a');
     stLink.className = 'subtree-link';
     stLink.textContent = 'view';
-    stLink.href = '/bt-compare?left_gen=sub-trees&left_fighter=' + encodeURIComponent(node.subTree);
+    stLink.href = '/bt-compare?' + (currentTournament !== 'default' ? 'tournament=' + currentTournament + '&' : '') + 'left_gen=sub-trees&left_fighter=' + encodeURIComponent(node.subTree);
     label.appendChild(stLink);
     panel.appendChild(label);
     panel.appendChild(div);
@@ -1796,6 +2610,7 @@ function showStats(stats, side) {
 
 function updateUrl() {
   const params = new URLSearchParams();
+  if (currentTournament !== 'default') params.set('tournament', currentTournament);
   const lg = document.getElementById('gen-left').value;
   const lf = document.getElementById('fighter-left').value;
   const rg = document.getElementById('gen-right').value;
@@ -1824,7 +2639,7 @@ async function applyUrlParams() {
   }
 }
 
-loadGenerations();
+loadTournaments().then(() => loadGenerations());
 </script>
 </body>
 </html>

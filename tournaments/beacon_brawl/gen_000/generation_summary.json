@@ -1,0 +1,49 @@
+{
+  "generation": 0,
+  "timestamp": "2026-03-28T08:15:40.5774192Z",
+  "fighter_count": 4,
+  "total_matches": 30,
+  "tournament_format": "round_robin_beacon_brawl_v2",
+  "best_of": 5,
+  "seed": 50801671,
+  "dll_hash": "3d4f4cc5650069938fc2302fd6bcc7bcbb7b5c76e67dfc815de8ab68e673349e",
+  "leaderboard": [
+    {
+      "rank": 1,
+      "fighter_id": "team_00",
+      "name": "Iron_Vanguard",
+      "color": "#c0392b",
+      "elo": 1075.3342,
+      "record": "10-5-0"
+    },
+    {
+      "rank": 2,
+      "fighter_id": "team_03",
+      "name": "Blitz_Runners",
+      "color": "#f39c12",
+      "elo": 1049.048,
+      "record": "9-6-0"
+    },
+    {
+      "rank": 3,
+      "fighter_id": "team_01",
+      "name": "Shadow_Flankers",
+      "color": "#8e44ad",
+      "elo": 988.51196,
+      "record": "8-7-0"
+    },
+    {
+      "rank": 4,
+      "fighter_id": "team_02",
+      "name": "Bastion_Guard",
+      "color": "#2980b9",
+      "elo": 887.1059,
+      "record": "3-12-0"
+    }
+  ],
+  "meta_stats": {
+    "avg_match_duration_ticks": 1642.2667,
+    "knockout_rate": 0,
+    "draw_rate": 0
+  }
+}

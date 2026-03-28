@@ -119,6 +119,7 @@ public record ReplayData
 {
     public ReplayArena Arena { get; init; } = new();
     public int CheckpointInterval { get; init; } = 10;
+    public int? MatchSeed { get; init; }
     public List<List<AiBtGym.BehaviorTree.BtNode>> FighterTrees { get; init; } = [];
     public List<ReplayCheckpoint> Checkpoints { get; init; } = [];
 }

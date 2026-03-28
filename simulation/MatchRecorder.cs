@@ -418,10 +418,11 @@ public class MatchRecorder
         A = fist.IsAttachedToWorld
     };
 
-    public ReplayData BuildReplayData(List<BtNode> trees0, List<BtNode> trees1, Arena arena) => new()
+    public ReplayData BuildReplayData(List<BtNode> trees0, List<BtNode> trees1, Arena arena, int? matchSeed = null) => new()
     {
         Arena = new ReplayArena { Width = arena.Width, Height = arena.Height, WallThickness = arena.WallThickness },
         CheckpointInterval = CheckpointInterval,
+        MatchSeed = matchSeed,
         FighterTrees = [trees0, trees1],
         Checkpoints = _checkpoints
     };
