@@ -1,48 +1,48 @@
 {
-  "generation": 0,
-  "timestamp": "2026-03-28T21:50:06.3543204Z",
+  "generation": 2,
+  "timestamp": "2026-03-28T23:17:59.0457452Z",
   "fighter_count": 4,
   "total_matches": 30,
   "tournament_format": "round_robin_beacon_brawl_v2",
   "best_of": 5,
-  "seed": 99658062,
-  "dll_hash": "051c9a327db8c967c44981f1cdf90687f2b2413b227471ee51ff69511269b8ea",
+  "seed": 104933250,
+  "dll_hash": "486b70b1599cbe31001960081568a1371b904e322872eb3bfe0509a1a9121b2c",
   "leaderboard": [
     {
       "rank": 1,
       "fighter_id": "team_03",
       "name": "Blitz_Runners",
       "color": "#f39c12",
-      "elo": 1098.9797,
-      "record": "12-3-0"
+      "elo": 1169.5226,
+      "record": "15-0-0"
     },
     {
       "rank": 2,
-      "fighter_id": "team_00",
-      "name": "Iron_Vanguard",
-      "color": "#c0392b",
-      "elo": 1087.5083,
-      "record": "12-3-0"
-    },
-    {
-      "rank": 3,
-      "fighter_id": "team_01",
-      "name": "Shadow_Flankers",
-      "color": "#8e44ad",
-      "elo": 922.796,
-      "record": "4-11-0"
-    },
-    {
-      "rank": 4,
       "fighter_id": "team_02",
       "name": "Bastion_Guard",
       "color": "#2980b9",
-      "elo": 890.71576,
-      "record": "2-13-0"
+      "elo": 1001.26764,
+      "record": "7-8-0"
+    },
+    {
+      "rank": 3,
+      "fighter_id": "team_00",
+      "name": "Iron_Vanguard",
+      "color": "#c0392b",
+      "elo": 984.0504,
+      "record": "8-7-0"
+    },
+    {
+      "rank": 4,
+      "fighter_id": "team_01",
+      "name": "Shadow_Flankers",
+      "color": "#8e44ad",
+      "elo": 845.15955,
+      "record": "0-15-0"
     }
   ],
   "meta_stats": {
-    "avg_match_duration_ticks": 5174.7666,
+    "avg_match_duration_ticks": 5284.8667,
     "knockout_rate": 0,
     "draw_rate": 0
   }

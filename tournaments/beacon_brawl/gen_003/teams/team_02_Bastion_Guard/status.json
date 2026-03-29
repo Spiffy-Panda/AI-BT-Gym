@@ -2,28 +2,28 @@
   "team_id": "team_02",
   "name": "Bastion_Guard",
   "color": "#2980b9",
-  "generation": 0,
+  "generation": 3,
   "record": {
-    "wins": 2,
-    "losses": 13,
+    "wins": 6,
+    "losses": 9,
     "draws": 0,
     "matches_played": 15
   },
-  "elo": 890.71576,
-  "win_rate": 0.13333334,
+  "elo": 972.4862,
+  "win_rate": 0.4,
   "aggregate_metrics": {
-    "avg_match_duration_ticks": 5208.7334,
-    "avg_score_diff": -52.466667,
-    "avg_beacon_ownership_pct": 0.340929,
-    "avg_kills_per_match": 6.866667,
-    "avg_deaths_per_match": 7,
-    "total_score_victories": 1,
-    "total_timeout_wins": 1
+    "avg_match_duration_ticks": 5516.4,
+    "avg_score_diff": -12.933333,
+    "avg_beacon_ownership_pct": 0.4336333,
+    "avg_kills_per_match": 8,
+    "avg_deaths_per_match": 7.4666667,
+    "total_score_victories": 2,
+    "total_timeout_wins": 4
   },
   "matchup_results": [
     {
       "opponent": "team_00_Iron_Vanguard",
-      "result": "loss",
+      "result": "win",
       "match_file": "match_002_g1_vs_team_00.json"
     },
     {
@@ -48,7 +48,7 @@
     },
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "loss",
+      "result": "win",
       "match_file": "match_004_g1_vs_team_01.json"
     },
     {
@@ -73,7 +73,7 @@
     },
     {
       "opponent": "team_03_Blitz_Runners",
-      "result": "loss",
+      "result": "win",
       "match_file": "match_006_g1_vs_team_03.json"
     },
     {
@@ -93,7 +93,7 @@
     },
     {
       "opponent": "team_03_Blitz_Runners",
-      "result": "loss",
+      "result": "win",
       "match_file": "match_006_g5_vs_team_03.json"
     }
   ]

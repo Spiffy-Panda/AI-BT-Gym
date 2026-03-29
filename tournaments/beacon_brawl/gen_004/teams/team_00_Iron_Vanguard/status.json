@@ -2,33 +2,33 @@
   "team_id": "team_00",
   "name": "Iron_Vanguard",
   "color": "#c0392b",
-  "generation": 0,
+  "generation": 4,
   "record": {
-    "wins": 12,
-    "losses": 3,
+    "wins": 8,
+    "losses": 7,
     "draws": 0,
     "matches_played": 15
   },
-  "elo": 1087.5083,
-  "win_rate": 0.8,
+  "elo": 1022.1067,
+  "win_rate": 0.53333336,
   "aggregate_metrics": {
-    "avg_match_duration_ticks": 5116.8,
-    "avg_score_diff": 36.333332,
-    "avg_beacon_ownership_pct": 0.508928,
-    "avg_kills_per_match": 6.6,
-    "avg_deaths_per_match": 5.9333334,
-    "total_score_victories": 10,
-    "total_timeout_wins": 2
+    "avg_match_duration_ticks": 5496.467,
+    "avg_score_diff": 9.333333,
+    "avg_beacon_ownership_pct": 0.46804196,
+    "avg_kills_per_match": 7.6666665,
+    "avg_deaths_per_match": 7.133333,
+    "total_score_victories": 4,
+    "total_timeout_wins": 4
   },
   "matchup_results": [
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g1_vs_team_01.json"
     },
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g2_vs_team_01.json"
     },
     {
@@ -38,7 +38,7 @@
     },
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g4_vs_team_01.json"
     },
     {
@@ -58,7 +58,7 @@
     },
     {
       "opponent": "team_02_Bastion_Guard",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_002_g3_vs_team_02.json"
     },
     {
@@ -68,7 +68,7 @@
     },
     {
       "opponent": "team_02_Bastion_Guard",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_002_g5_vs_team_02.json"
     },
     {
@@ -93,7 +93,7 @@
     },
     {
       "opponent": "team_03_Blitz_Runners",
-      "result": "loss",
+      "result": "win",
       "match_file": "match_003_g5_vs_team_03.json"
     }
   ]

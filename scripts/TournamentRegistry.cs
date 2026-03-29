@@ -66,7 +66,14 @@ public static class TournamentRegistry
             GameType: TournamentGameType.BeaconBrawl
         )
         {
-            GetBeaconTeams = gen => BeaconSeedTeams.GetAllEntries()
+            GetBeaconTeams = gen => gen switch
+            {
+                >= 4 => BB_G4.GetAllEntries(),
+                3    => BB_G3.GetAllEntries(),
+                2    => BB_G2.GetAllEntries(),
+                1    => BB_G1.GetAllEntries(),
+                _    => BeaconSeedTeams.GetAllEntries()
+            }
         });
     }
 

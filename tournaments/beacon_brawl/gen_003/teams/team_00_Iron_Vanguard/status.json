@@ -2,33 +2,33 @@
   "team_id": "team_00",
   "name": "Iron_Vanguard",
   "color": "#c0392b",
-  "generation": 0,
+  "generation": 3,
   "record": {
-    "wins": 12,
-    "losses": 3,
+    "wins": 6,
+    "losses": 9,
     "draws": 0,
     "matches_played": 15
   },
-  "elo": 1087.5083,
-  "win_rate": 0.8,
+  "elo": 967.2835,
+  "win_rate": 0.4,
   "aggregate_metrics": {
-    "avg_match_duration_ticks": 5116.8,
-    "avg_score_diff": 36.333332,
-    "avg_beacon_ownership_pct": 0.508928,
-    "avg_kills_per_match": 6.6,
-    "avg_deaths_per_match": 5.9333334,
-    "total_score_victories": 10,
-    "total_timeout_wins": 2
+    "avg_match_duration_ticks": 5328.6,
+    "avg_score_diff": -14.333333,
+    "avg_beacon_ownership_pct": 0.42940748,
+    "avg_kills_per_match": 7.4666667,
+    "avg_deaths_per_match": 6.866667,
+    "total_score_victories": 3,
+    "total_timeout_wins": 3
   },
   "matchup_results": [
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g1_vs_team_01.json"
     },
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g2_vs_team_01.json"
     },
     {
@@ -38,17 +38,17 @@
     },
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g4_vs_team_01.json"
     },
     {
       "opponent": "team_01_Shadow_Flankers",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_001_g5_vs_team_01.json"
     },
     {
       "opponent": "team_02_Bastion_Guard",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_002_g1_vs_team_02.json"
     },
     {
@@ -78,17 +78,17 @@
     },
     {
       "opponent": "team_03_Blitz_Runners",
-      "result": "loss",
+      "result": "win",
       "match_file": "match_003_g2_vs_team_03.json"
     },
     {
       "opponent": "team_03_Blitz_Runners",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_003_g3_vs_team_03.json"
     },
     {
       "opponent": "team_03_Blitz_Runners",
-      "result": "win",
+      "result": "loss",
       "match_file": "match_003_g4_vs_team_03.json"
     },
     {
