@@ -49,5 +49,5 @@ generations/
 # Replay config (transient, written by server)
 replay_config.json
 
-# Archived experiments
-archive/
+# Archived experiment data (large replay/tournament files)
+archive/beacon_brawl/tournaments/
