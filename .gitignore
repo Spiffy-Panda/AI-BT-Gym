@@ -1,6 +1,7 @@
 # Godot
 .godot/
 *.import
+*.uid
 export_presets.cfg
 
 # .NET / C#
@@ -42,6 +43,7 @@ desktop.ini
 
 # Tournament output (regenerated)
 generations/
+tournaments/
 
 # Battle replay logs (large, regenerated)
 **/battles/match_*.json

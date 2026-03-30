@@ -4,8 +4,8 @@
 AI-BT-Gym — Evolutionary behavior tree gym in Godot 4.6 (C#).
 
 ## Godot
-- **Godot executable**: `"/c/Program Files/godot/godot_console.exe"` (headless-capable)
-- **Editor**: `"/c/Program Files/godot/godot.exe"`
+- **Godot executable**: `"/c/Program Files/Godot/Godot_console.exe"` (headless-capable)
+- **Editor**: `"/c/Program Files/Godot/Godot.exe"`
 - **Version**: 4.6.1 stable mono
 
 ## Build & Test
@@ -14,10 +14,10 @@ AI-BT-Gym — Evolutionary behavior tree gym in Godot 4.6 (C#).
 dotnet build
 
 # Run tests headlessly
-"/c/Program Files/godot/godot_console.exe" --headless --scene res://scenes/test_runner.tscn
+"/c/Program Files/Godot/Godot_console.exe" --headless --scene res://scenes/test_runner.tscn
 
 # Run the game
-"/c/Program Files/godot/godot_console.exe" --scene res://scenes/main.tscn
+"/c/Program Files/Godot/Godot_console.exe" --scene res://scenes/main.tscn
 ```
 
 ## Key Paths
@@ -26,8 +26,8 @@ dotnet build
 - Godot scripts: `scripts/`
 - Tests: `tests/MovementTests.cs` (run via `scenes/test_runner.tscn`)
 - Test BTs: `scripts/TestTrees.cs`
-- Seed AI definitions: `seed_generation/SeedTrees.cs`
-- Tournament output: `generations/` (e.g. `generations/gen_000/`)
+- Seed AI definitions: `seed_generation/` (`SeedTrees.cs`, `Gen00xTrees.cs`, `SubTrees.cs`)
+- Tournament output: `tournaments/` (e.g. `tournaments/beacon_brawl/gen_000/`)
 - Analysis scripts: `tools/`
 
 ## Tournament Server
