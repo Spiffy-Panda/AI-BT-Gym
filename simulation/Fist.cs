@@ -64,6 +64,16 @@ public class Fist
         IsAttachedToWorld = false;
     }
 
+    /// <summary>Force-set all fist state (for replay snapshot application).</summary>
+    public void ForceState(FistChainState state, Vector2 pos, Vector2 anchor, float chainLen, bool attached)
+    {
+        ChainState = state;
+        Position = pos;
+        AnchorPoint = anchor;
+        ChainLength = chainLen;
+        IsAttachedToWorld = attached;
+    }
+
     /// <summary>Detach fist from world anchor.</summary>
     public void Detach()
     {

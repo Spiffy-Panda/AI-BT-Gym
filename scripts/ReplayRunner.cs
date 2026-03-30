@@ -2,15 +2,15 @@
 // ReplayRunner.cs — Replays a match from battle JSON with divergence detection
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Supports both Fight mode and Beacon Brawl mode.
-// Reads replay_config.json from the project root to find the battle log path.
-// Re-simulates the match tick-by-tick using the stored seed + BT trees, then
-// compares live state against stored checkpoints to detect determinism drift.
+// Pre-simulates the entire match at startup, capturing per-tick snapshots.
+// Playback and scrubbing are instant — just index into the snapshot array.
+// Divergence checking runs during pre-simulation against stored checkpoints.
 //
 // Controls:
 //   Space       — Pause / unpause
 //   Left/Right  — Step one tick (while paused)
 //   R           — Restart replay
+//   Home        — Reset camera
 //   Escape      — Quit
 
 using System;
@@ -31,68 +31,139 @@ public partial class ReplayRunner : Node2D
     // ── Camera ──
     private Camera2D? _camera;
     private bool _dragging;
-    private Vector2 _dragStart;
     private const float ZoomMin = 0.25f;
     private const float ZoomMax = 3f;
     private const float ZoomStep = 0.1f;
 
-    // ── Shared state ──
-    private Label? _statusLabel;
+    // ── HUD controls ──
+    private Label? _tickLabel;
+    private Label? _divergenceLabel;
+    private Button? _playPauseBtn;
+    private HSlider? _scrubBar;
+    private bool _scrubbing;
+
+    // ── Playback state ──
     private bool _paused;
+    private bool _isBeaconBrawl;
+    private bool _hasMatch;
+    private int _displayTick;
+    private int _finalTick; // last tick with a snapshot
+    private List<TickSnapshot> _timeline = [];
+
+    // ── Divergence results (computed during pre-sim) ──
     private bool _diverged;
     private int _firstDivergenceTick = -1;
     private int _checkpointsVerified;
     private int _checkpointsFailed;
     private List<string> _divergenceLog = [];
-    private bool _summaryPrinted;
-    private bool _isBeaconBrawl;
-    private bool _hasMatch; // true once a match has been set up (either mode)
 
-    // Tolerances for float comparison
+    // Tolerances
     private const float PosTolerance = 0.01f;
     private const float VelTolerance = 0.1f;
     private const float HpTolerance = 0.01f;
     private const float ChainTolerance = 0.01f;
 
-    // ── Fight mode state ──
-    private Match? _fightMatch;
+    // ── Replay data ──
     private ReplayData? _fightReplayData;
     private Dictionary<int, ReplayCheckpoint> _fightCheckpoints = new();
-
-    // ── Beacon Brawl state ──
-    private BeaconMatch? _beaconMatch;
     private BeaconReplayData? _beaconReplayData;
     private Dictionary<int, BeaconReplayCheckpoint> _beaconCheckpoints = new();
 
+    // ── Live objects (renderers read from these) ──
+    // Fight mode
+    private Fighter? _fighter0, _fighter1;
+    // Beacon mode
+    private Pawn[]? _pawns;
+    private Beacon[]? _beacons;
+    private int[]? _scores;
+    private int[]? _kills;
+    private BeaconMatch? _beaconMatchRef; // for score overlay
+    private ProjectileRenderer? _projectileRenderer;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Snapshot types — lightweight per-tick state
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private struct TickSnapshot
+    {
+        // Fight mode (2 fighters, 4 fists)
+        public FighterSnap[]? Fighters; // [2]
+        public FistSnap[]? Fists;       // [4]: L0, R0, L1, R1
+
+        // Beacon mode
+        public PawnSnap[]? Pawns;       // [N]
+        public BeaconSnap[]? Beacons;   // [3]
+        public int[]? Scores;           // [2]
+        public int[]? Kills;            // [2]
+        public int[]? Rates;            // [2]
+        public ProjectileSnap[]? Projectiles; // live pistol bullets
+        public RifleFlashSnap[]? RifleFlashes; // rifle shots fired this tick
+        public bool IsOver;
+        public int WinnerIdx;
+    }
+
+    private struct ProjectileSnap
+    {
+        public float X, Y, Vx, Vy, Gravity, Damage, Knockback, Radius;
+        public int OwnerTeam, OwnerPawnIndex, LifetimeRemaining;
+        public bool IsAlive;
+    }
+
+    private struct RifleFlashSnap
+    {
+        public Vector2[] Segments;
+        public int Team;
+    }
+
+    private struct FighterSnap
+    {
+        public float X, Y, Vx, Vy, Hp;
+        public bool Grounded;
+    }
+
+    private struct FistSnap
+    {
+        public int State; // FistChainState
+        public float X, Y, Ax, Ay, Cl;
+        public bool Attached;
+    }
+
+    private struct PawnSnap
+    {
+        public float X, Y, Vx, Vy, Hp;
+        public bool Grounded, Dead, Stunned, Vulnerable, ParryActive;
+        public int StunTicks, VulnTicks, ParryCooldown, ParryActiveTicks;
+        public int RespawnTimer;
+        // Hook (for grapplers)
+        public int HookState;
+        public float HookX, HookY, HookAx, HookAy, HookCl;
+        public bool HookAttached;
+    }
+
+    private struct BeaconSnap
+    {
+        public int Owner, CaptureProgress;
+        public bool Contested;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Initialization
+    // ═══════════════════════════════════════════════════════════════════════
+
     public override void _Ready()
     {
-        // Read config to find battle log path
         string configPath = ProjectSettings.GlobalizePath("res://replay_config.json");
-        if (!File.Exists(configPath))
-        {
-            ShowError("replay_config.json not found — cannot start replay");
-            return;
-        }
+        if (!File.Exists(configPath)) { ShowError("replay_config.json not found"); return; }
 
         string configJson = File.ReadAllText(configPath);
         var config = JsonSerializer.Deserialize<ReplayConfig>(configJson, TournamentJson.Options);
-        if (config?.BattleLogPath == null)
-        {
-            ShowError("replay_config.json missing battle_log_path");
-            return;
-        }
+        if (config?.BattleLogPath == null) { ShowError("replay_config.json missing battle_log_path"); return; }
 
         string battlePath = config.BattleLogPath;
-        if (!File.Exists(battlePath))
-        {
-            ShowError($"Battle log not found:\n{battlePath}");
-            return;
-        }
+        if (!File.Exists(battlePath)) { ShowError($"Battle log not found:\n{battlePath}"); return; }
 
         string battleJson = File.ReadAllText(battlePath);
 
-        // Detect mode: check if the JSON has "team_a_trees" in the replay (beacon brawl)
-        // or "fighter_trees" (fight mode)
         using var doc = JsonDocument.Parse(battleJson);
         var root = doc.RootElement;
         if (root.TryGetProperty("replay", out var replayEl) &&
@@ -108,378 +179,577 @@ public partial class ReplayRunner : Node2D
         }
     }
 
-    // ── Fight mode loading ──
-
     private void LoadFightMode(string battleJson)
     {
         var battleLog = JsonSerializer.Deserialize<BattleLog>(battleJson, TournamentJson.Options);
         _fightReplayData = battleLog?.Replay;
-
         if (_fightReplayData == null || _fightReplayData.FighterTrees.Count < 2)
-        {
-            ShowError("Battle log has no replay data or missing fighter trees.");
-            return;
-        }
+        { ShowError("No replay data or missing fighter trees."); return; }
 
         foreach (var cp in _fightReplayData.Checkpoints)
             _fightCheckpoints[cp.T] = cp;
 
         GD.Print($"=== REPLAY (Fight): {battleLog!.Fighter} vs {battleLog.Opponent} ===");
         GD.Print($"  Seed: {_fightReplayData.MatchSeed?.ToString() ?? "NONE"}");
-        GD.Print($"  Checkpoints: {_fightReplayData.Checkpoints.Count}");
-
         StartReplay();
     }
-
-    // ── Beacon Brawl loading ──
 
     private void LoadBeaconBrawl(string battleJson)
     {
         var battleLog = JsonSerializer.Deserialize<BeaconBattleLog>(battleJson, TournamentJson.Options);
         _beaconReplayData = battleLog?.Replay;
-
         if (_beaconReplayData?.TeamATrees == null || _beaconReplayData?.TeamBTrees == null)
-        {
-            ShowError("Beacon Brawl battle log has no replay trees.");
-            return;
-        }
+        { ShowError("Beacon Brawl battle log has no replay trees."); return; }
 
         foreach (var cp in _beaconReplayData.Checkpoints)
             _beaconCheckpoints[cp.T] = cp;
 
         GD.Print($"=== REPLAY (Beacon Brawl): {battleLog!.Team} vs {battleLog.Opponent} ===");
-        GD.Print($"  Seed: {_beaconReplayData.MatchSeed?.ToString() ?? "NONE (pre-seed era)"}");
-        GD.Print($"  Checkpoints: {_beaconReplayData.Checkpoints.Count}");
-
+        GD.Print($"  Seed: {_beaconReplayData.MatchSeed?.ToString() ?? "NONE"}");
         StartReplay();
     }
 
-    // ── Start / restart ──
+    // ═══════════════════════════════════════════════════════════════════════
+    // Pre-simulation + scene setup
+    // ═══════════════════════════════════════════════════════════════════════
 
     private void StartReplay()
     {
-        // Clear state
         _diverged = false;
         _firstDivergenceTick = -1;
         _checkpointsVerified = 0;
         _checkpointsFailed = 0;
         _divergenceLog.Clear();
-        _summaryPrinted = false;
+        _displayTick = 0;
         _hasMatch = false;
+        _paused = false;
 
         foreach (var child in GetChildren())
             child.QueueFree();
 
-        // Camera for pan/zoom (middle-click drag, scroll wheel)
         _camera = new Camera2D { Enabled = true };
         AddChild(_camera);
 
+        // Pre-simulate and build timeline
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        _timeline.Clear();
+
         if (_isBeaconBrawl)
-            StartBeaconReplay();
+            PreSimulateBeacon();
         else
-            StartFightReplay();
+            PreSimulateFight();
+
+        sw.Stop();
+        _finalTick = _timeline.Count - 1;
+        GD.Print($"  Pre-simulated {_timeline.Count} ticks in {sw.ElapsedMilliseconds}ms");
+        GD.Print($"  Divergence: {(_diverged ? $"DIVERGED at tick {_firstDivergenceTick}" : "DETERMINISTIC")}");
+        GD.Print($"  Checkpoints: {_checkpointsVerified} passed, {_checkpointsFailed} failed");
+
+        // Build scene (renderers bound to live objects we'll update each frame)
+        if (_isBeaconBrawl)
+            BuildBeaconScene();
+        else
+            BuildFightScene();
 
         FitCameraToArena();
+        ApplySnapshot(_displayTick);
     }
 
-    private void StartFightReplay()
+    // ── Fight pre-sim ──
+
+    private void PreSimulateFight()
     {
-        if (_fightReplayData == null) return;
+        var rd = _fightReplayData!;
+        var arena = new Arena(rd.Arena.Width, rd.Arena.Height);
+        var match = new Match(arena, rd.FighterTrees[0], rd.FighterTrees[1], seed: rd.MatchSeed);
 
-        var arenaData = _fightReplayData.Arena;
-        var arena = new Arena(arenaData.Width, arenaData.Height);
-        var tree0 = _fightReplayData.FighterTrees[0];
-        var tree1 = _fightReplayData.FighterTrees[1];
-        _fightMatch = new Match(arena, tree0, tree1, seed: _fightReplayData.MatchSeed);
+        // Capture initial state (tick 0, before any step — NOT a checkpoint)
+        // First step will produce tick 0 checkpoint
+        while (!match.IsOver)
+        {
+            match.Step();
+            int justCompleted = match.Tick - 1;
 
-        // Arena renderer
+            // Capture snapshot
+            _timeline.Add(CaptureFightSnapshot(match));
+
+            // Divergence check against stored checkpoints
+            if (_fightCheckpoints.TryGetValue(justCompleted, out var expected))
+            {
+                var errors = new List<string>();
+                CheckFighter(errors, 0, match.Fighter0, expected.F[0]);
+                CheckFighter(errors, 1, match.Fighter1, expected.F[1]);
+                CheckFist(errors, "F0.L", match.Fighter0.LeftFist, expected.Fists[0]);
+                CheckFist(errors, "F0.R", match.Fighter0.RightFist, expected.Fists[1]);
+                CheckFist(errors, "F1.L", match.Fighter1.LeftFist, expected.Fists[2]);
+                CheckFist(errors, "F1.R", match.Fighter1.RightFist, expected.Fists[3]);
+                RecordCheckResult(justCompleted, errors);
+            }
+        }
+
+        // Create the live fighter objects for renderers
+        _fighter0 = new Fighter(0, new Vector2(0, 0));
+        _fighter1 = new Fighter(1, new Vector2(0, 0));
+    }
+
+    private TickSnapshot CaptureFightSnapshot(Match m) => new()
+    {
+        Fighters =
+        [
+            new FighterSnap { X = m.Fighter0.Position.X, Y = m.Fighter0.Position.Y,
+                Vx = m.Fighter0.Velocity.X, Vy = m.Fighter0.Velocity.Y,
+                Hp = m.Fighter0.Health, Grounded = m.Fighter0.IsGrounded },
+            new FighterSnap { X = m.Fighter1.Position.X, Y = m.Fighter1.Position.Y,
+                Vx = m.Fighter1.Velocity.X, Vy = m.Fighter1.Velocity.Y,
+                Hp = m.Fighter1.Health, Grounded = m.Fighter1.IsGrounded }
+        ],
+        Fists =
+        [
+            CapFist(m.Fighter0.LeftFist), CapFist(m.Fighter0.RightFist),
+            CapFist(m.Fighter1.LeftFist), CapFist(m.Fighter1.RightFist)
+        ],
+        IsOver = m.IsOver,
+        WinnerIdx = m.WinnerIndex
+    };
+
+    private static FistSnap CapFist(Fist f) => new()
+    {
+        State = (int)f.ChainState, X = f.Position.X, Y = f.Position.Y,
+        Ax = f.AnchorPoint.X, Ay = f.AnchorPoint.Y, Cl = f.ChainLength, Attached = f.IsAttachedToWorld
+    };
+
+    // ── Beacon pre-sim ──
+
+    private void PreSimulateBeacon()
+    {
+        var rd = _beaconReplayData!;
+        var arena = new BeaconArena(rd.Arena.Width, rd.Arena.Height);
+        var firstCp = rd.Checkpoints[0];
+        var rolesA = firstCp.P.Where(p => p.T == 0).Select(p => (PawnRole)p.R).ToArray();
+        var rolesB = firstCp.P.Where(p => p.T == 1).Select(p => (PawnRole)p.R).ToArray();
+        var match = new BeaconMatch(arena, rd.TeamATrees!.ToArray(), rolesA,
+            rd.TeamBTrees!.ToArray(), rolesB, seed: rd.MatchSeed);
+
+        // Capture rifle flashes per-tick via callback
+        var pendingRifleFlashes = new List<RifleFlashSnap>();
+        match.OnRifleFired = (segments, team) =>
+        {
+            pendingRifleFlashes.Add(new RifleFlashSnap { Segments = segments, Team = team });
+        };
+
+        while (!match.IsOver)
+        {
+            pendingRifleFlashes.Clear();
+            match.Step();
+            int justCompleted = match.Tick - 1;
+
+            _timeline.Add(CaptureBeaconSnapshot(match, pendingRifleFlashes));
+
+            if (_beaconCheckpoints.TryGetValue(justCompleted, out var expected))
+            {
+                var errors = new List<string>();
+                if (match.Scores[0] != expected.S[0]) errors.Add($"Score[0]: expected {expected.S[0]}, got {match.Scores[0]}");
+                if (match.Scores[1] != expected.S[1]) errors.Add($"Score[1]: expected {expected.S[1]}, got {match.Scores[1]}");
+                for (int i = 0; i < match.AllPawns.Length && i < expected.P.Count; i++)
+                {
+                    var p = match.AllPawns[i]; var e = expected.P[i];
+                    string n = $"Pawn[{p.TeamIndex}.{p.PawnIndex}]";
+                    if (MathF.Abs(p.Position.X - e.X) > PosTolerance) errors.Add($"{n}.X: {e.X:F4} vs {p.Position.X:F4}");
+                    if (MathF.Abs(p.Position.Y - e.Y) > PosTolerance) errors.Add($"{n}.Y: {e.Y:F4} vs {p.Position.Y:F4}");
+                    if (MathF.Abs(p.Health - e.Hp) > HpTolerance) errors.Add($"{n}.Hp: {e.Hp:F4} vs {p.Health:F4}");
+                    if (p.IsDead != e.D) errors.Add($"{n}.Dead: {e.D} vs {p.IsDead}");
+                }
+                RecordCheckResult(justCompleted, errors);
+            }
+        }
+    }
+
+    private TickSnapshot CaptureBeaconSnapshot(BeaconMatch m, List<RifleFlashSnap>? rifleFlashes = null)
+    {
+        var pawns = new PawnSnap[m.AllPawns.Length];
+        for (int i = 0; i < m.AllPawns.Length; i++)
+        {
+            var p = m.AllPawns[i];
+            pawns[i] = new PawnSnap
+            {
+                X = p.Position.X, Y = p.Position.Y, Vx = p.Velocity.X, Vy = p.Velocity.Y,
+                Hp = p.Health, Grounded = p.IsGrounded, Dead = p.IsDead,
+                Stunned = p.IsStunned, Vulnerable = p.IsVulnerable, ParryActive = p.IsParryActive,
+                StunTicks = p.StunTicksRemaining, VulnTicks = p.VulnerableTicks,
+                ParryCooldown = p.ParryCooldown, ParryActiveTicks = p.ParryActiveTicks,
+                RespawnTimer = p.RespawnTimer,
+                HookState = p.Role == PawnRole.Grappler ? (int)p.Hook.ChainState : 0,
+                HookX = p.Role == PawnRole.Grappler ? p.Hook.Position.X : 0,
+                HookY = p.Role == PawnRole.Grappler ? p.Hook.Position.Y : 0,
+                HookAx = p.Role == PawnRole.Grappler ? p.Hook.AnchorPoint.X : 0,
+                HookAy = p.Role == PawnRole.Grappler ? p.Hook.AnchorPoint.Y : 0,
+                HookCl = p.Role == PawnRole.Grappler ? p.Hook.ChainLength : 0,
+                HookAttached = p.Role == PawnRole.Grappler && p.Hook.IsAttachedToWorld
+            };
+        }
+        var beacons = new BeaconSnap[m.Beacons.Length];
+        for (int i = 0; i < m.Beacons.Length; i++)
+            beacons[i] = new BeaconSnap { Owner = m.Beacons[i].OwnerTeam,
+                CaptureProgress = m.Beacons[i].CaptureProgress, Contested = m.Beacons[i].IsContested };
+
+        // Capture live projectiles
+        var projSnaps = new ProjectileSnap[m.Projectiles.Count];
+        for (int i = 0; i < m.Projectiles.Count; i++)
+        {
+            var proj = m.Projectiles[i];
+            projSnaps[i] = new ProjectileSnap
+            {
+                X = proj.Position.X, Y = proj.Position.Y,
+                Vx = proj.Velocity.X, Vy = proj.Velocity.Y,
+                Gravity = proj.Gravity, Damage = proj.Damage, Knockback = proj.Knockback,
+                Radius = proj.Radius, OwnerTeam = proj.OwnerTeam,
+                OwnerPawnIndex = proj.OwnerPawnIndex,
+                LifetimeRemaining = proj.LifetimeRemaining, IsAlive = proj.IsAlive
+            };
+        }
+
+        return new TickSnapshot
+        {
+            Pawns = pawns, Beacons = beacons,
+            Scores = [m.Scores[0], m.Scores[1]], Kills = [m.Kills[0], m.Kills[1]],
+            Rates = [m.Rates[0], m.Rates[1]],
+            Projectiles = projSnaps,
+            RifleFlashes = rifleFlashes?.Count > 0 ? rifleFlashes.ToArray() : null,
+            IsOver = m.IsOver, WinnerIdx = m.WinnerTeam
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scene building (renderers bound to live mutable objects)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void BuildFightScene()
+    {
+        var rd = _fightReplayData!;
+        var arena = new Arena(rd.Arena.Width, rd.Arena.Height);
+
         AddChild(new ArenaRenderer { Arena = arena });
+        AddChild(new FighterRenderer { Fighter = _fighter0!, TeamColor = new Color(0.9f, 0.2f, 0.2f) });
+        AddChild(new FighterRenderer { Fighter = _fighter1!, TeamColor = new Color(0.3f, 0.5f, 1f) });
 
-        // Fighter renderers
-        AddChild(new FighterRenderer
-        {
-            Fighter = _fightMatch.Fighter0,
-            TeamColor = new Color(0.9f, 0.2f, 0.2f)
-        });
-        AddChild(new FighterRenderer
-        {
-            Fighter = _fightMatch.Fighter1,
-            TeamColor = new Color(0.3f, 0.5f, 1f)
-        });
-
-        // Debug overlay
         var canvasLayer = new CanvasLayer();
         AddChild(canvasLayer);
-        canvasLayer.AddChild(new DebugOverlay { Match = _fightMatch });
-
-        AddStatusLabel(canvasLayer, arenaData.Height);
+        // DebugOverlay needs a Match reference for tick/time — create a lightweight wrapper
+        // Instead, add a simple label
+        AddControlBar(canvasLayer);
         _hasMatch = true;
     }
 
-    private void StartBeaconReplay()
+    private void BuildBeaconScene()
     {
-        if (_beaconReplayData == null) return;
+        var rd = _beaconReplayData!;
+        var arena = new BeaconArena(rd.Arena.Width, rd.Arena.Height);
 
-        var ad = _beaconReplayData.Arena;
-        var arena = new BeaconArena(ad.Width, ad.Height);
-
-        // Extract roles from the first checkpoint's pawn data
-        var firstCp = _beaconReplayData.Checkpoints[0];
-        int teamSize = _beaconReplayData.TeamSize;
+        // Create live pawn objects for renderers
+        var firstCp = rd.Checkpoints[0];
         var rolesA = firstCp.P.Where(p => p.T == 0).Select(p => (PawnRole)p.R).ToArray();
         var rolesB = firstCp.P.Where(p => p.T == 1).Select(p => (PawnRole)p.R).ToArray();
+        int teamSize = rd.TeamSize;
+        _pawns = new Pawn[teamSize * 2];
+        for (int i = 0; i < teamSize; i++)
+        {
+            _pawns[i] = new Pawn(0, i, rolesA[i], Vector2.Zero);
+            _pawns[teamSize + i] = new Pawn(1, i, rolesB[i], Vector2.Zero);
+        }
+        _beacons = arena.BeaconZones.Select(z => new Beacon(z)).ToArray();
+        _scores = [0, 0];
+        _kills = [0, 0];
 
-        _beaconMatch = new BeaconMatch(arena,
-            _beaconReplayData.TeamATrees!.ToArray(), rolesA,
-            _beaconReplayData.TeamBTrees!.ToArray(), rolesB,
-            seed: _beaconReplayData.MatchSeed);
+        // We need a BeaconMatch-like object for ScoreOverlay. Create a real one but never step it.
+        _beaconMatchRef = new BeaconMatch(arena, rd.TeamATrees!.ToArray(), rolesA,
+            rd.TeamBTrees!.ToArray(), rolesB);
 
-        // Colors — parse from battle log or use defaults
-        var colorA = new Color(0.16f, 0.5f, 0.73f);  // blue
-        var colorB = new Color(0.56f, 0.27f, 0.68f);  // purple
+        var colorA = new Color(0.16f, 0.5f, 0.73f);
+        var colorB = new Color(0.56f, 0.27f, 0.68f);
 
-        // Arena renderer
         AddChild(new BeaconArenaRenderer
         {
-            Arena = arena,
-            Beacons = _beaconMatch.Beacons,
-            TeamAColor = colorA,
-            TeamBColor = colorB
+            Arena = arena, Beacons = _beacons, TeamAColor = colorA, TeamBColor = colorB
         });
-
-        // Pawn renderers
-        foreach (var pawn in _beaconMatch.AllPawns)
+        foreach (var pawn in _pawns)
         {
             AddChild(new PawnRenderer
             {
-                Pawn = pawn,
-                TeamColor = pawn.TeamIndex == 0 ? colorA : colorB
+                Pawn = pawn, TeamColor = pawn.TeamIndex == 0 ? colorA : colorB
             });
         }
-
-        // Projectile renderer + wire rifle flash notifications
-        var projRenderer = new ProjectileRenderer
+        _projectileRenderer = new ProjectileRenderer
         {
-            Match = _beaconMatch,
-            TeamAColor = colorA,
-            TeamBColor = colorB
+            Match = _beaconMatchRef, TeamAColor = colorA, TeamBColor = colorB
         };
-        AddChild(projRenderer);
-        _beaconMatch.OnRifleFired = (segments, team) =>
-            projRenderer.NotifyRifleShot(segments, team);
+        AddChild(_projectileRenderer);
 
-        // Score overlay
         var canvasLayer = new CanvasLayer();
         AddChild(canvasLayer);
         canvasLayer.AddChild(new ScoreOverlay
         {
-            Match = _beaconMatch,
-            TeamAColor = colorA,
-            TeamBColor = colorB,
-            TeamAName = "Team A",
-            TeamBName = "Team B"
+            Match = _beaconMatchRef, TeamAColor = colorA, TeamBColor = colorB,
+            TeamAName = "Team A", TeamBName = "Team B"
         });
 
-        AddStatusLabel(canvasLayer, ad.Height);
+        AddControlBar(canvasLayer);
         _hasMatch = true;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Snapshot application — write pre-computed state to live objects
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void ApplySnapshot(int tick)
+    {
+        if (tick < 0 || tick >= _timeline.Count) return;
+        var snap = _timeline[tick];
+
+        if (!_isBeaconBrawl && snap.Fighters != null && snap.Fists != null)
+        {
+            ApplyFighterSnap(_fighter0!, snap.Fighters[0], snap.Fists[0], snap.Fists[1]);
+            ApplyFighterSnap(_fighter1!, snap.Fighters[1], snap.Fists[2], snap.Fists[3]);
+        }
+        else if (_isBeaconBrawl && snap.Pawns != null && _pawns != null)
+        {
+            for (int i = 0; i < _pawns.Length && i < snap.Pawns.Length; i++)
+                ApplyPawnSnap(_pawns[i], snap.Pawns[i]);
+            if (snap.Beacons != null && _beacons != null)
+                for (int i = 0; i < _beacons.Length && i < snap.Beacons.Length; i++)
+                    ApplyBeaconSnap(_beacons[i], snap.Beacons[i]);
+            // Update score overlay's match reference
+            if (_beaconMatchRef != null && snap.Scores != null)
+            {
+                _beaconMatchRef.Scores[0] = snap.Scores[0];
+                _beaconMatchRef.Scores[1] = snap.Scores[1];
+                _beaconMatchRef.Kills[0] = snap.Kills?[0] ?? 0;
+                _beaconMatchRef.Kills[1] = snap.Kills?[1] ?? 0;
+                _beaconMatchRef.Rates[0] = snap.Rates?[0] ?? 0;
+                _beaconMatchRef.Rates[1] = snap.Rates?[1] ?? 0;
+                _beaconMatchRef.Tick = tick;
+                _beaconMatchRef.IsOver = snap.IsOver;
+                _beaconMatchRef.WinnerTeam = snap.WinnerIdx;
+
+                // Sync pawn state to match ref so ScoreOverlay can read health
+                for (int i = 0; i < _beaconMatchRef.TeamA.Length && i < snap.Pawns!.Length; i++)
+                    ApplyPawnSnap(_beaconMatchRef.TeamA[i], snap.Pawns[i]);
+                for (int i = 0; i < _beaconMatchRef.TeamB.Length; i++)
+                {
+                    int si = _beaconMatchRef.TeamA.Length + i;
+                    if (si < snap.Pawns!.Length)
+                        ApplyPawnSnap(_beaconMatchRef.TeamB[i], snap.Pawns[si]);
+                }
+
+                // Sync beacon state to match ref
+                if (snap.Beacons != null)
+                    for (int i = 0; i < _beaconMatchRef.Beacons.Length && i < snap.Beacons.Length; i++)
+                        ApplyBeaconSnap(_beaconMatchRef.Beacons[i], snap.Beacons[i]);
+
+                // Restore projectiles so ProjectileRenderer can draw them
+                _beaconMatchRef.Projectiles.Clear();
+                if (snap.Projectiles != null)
+                {
+                    foreach (var ps in snap.Projectiles)
+                    {
+                        if (!ps.IsAlive) continue;
+                        var proj = new Projectile(
+                            new Vector2(ps.X, ps.Y), new Vector2(ps.Vx, ps.Vy),
+                            ps.Gravity, ps.Damage, ps.Knockback,
+                            ps.OwnerTeam, ps.OwnerPawnIndex, ps.LifetimeRemaining);
+                        proj.Radius = ps.Radius;
+                        _beaconMatchRef.Projectiles.Add(proj);
+                    }
+                }
+
+                // Feed rifle flashes to renderer
+                if (snap.RifleFlashes != null && _projectileRenderer != null)
+                {
+                    foreach (var rf in snap.RifleFlashes)
+                        _projectileRenderer.NotifyRifleShot(rf.Segments, rf.Team);
+                }
+            }
+        }
+    }
+
+    private static void ApplyFighterSnap(Fighter f, FighterSnap s, FistSnap left, FistSnap right)
+    {
+        f.Position = new Vector2(s.X, s.Y);
+        f.Velocity = new Vector2(s.Vx, s.Vy);
+        f.Health = s.Hp;
+        f.IsGrounded = s.Grounded;
+        ApplyFistSnap(f.LeftFist, left);
+        ApplyFistSnap(f.RightFist, right);
+    }
+
+    private static void ApplyFistSnap(Fist fist, FistSnap s)
+    {
+        fist.ForceState((FistChainState)s.State, new Vector2(s.X, s.Y),
+            new Vector2(s.Ax, s.Ay), s.Cl, s.Attached);
+    }
+
+    private static void ApplyPawnSnap(Pawn p, PawnSnap s)
+    {
+        p.Position = new Vector2(s.X, s.Y);
+        p.Velocity = new Vector2(s.Vx, s.Vy);
+        p.Health = s.Hp;
+        p.IsGrounded = s.Grounded;
+        p.IsDead = s.Dead;
+        p.IsStunned = s.Stunned;
+        p.StunTicksRemaining = s.StunTicks;
+        p.VulnerableTicks = s.VulnTicks;
+        p.ParryCooldown = s.ParryCooldown;
+        p.ParryActiveTicks = s.ParryActiveTicks;
+        p.RespawnTimer = s.RespawnTimer;
+        if (p.Role == PawnRole.Grappler)
+        {
+            p.Hook.ForceState((FistChainState)s.HookState, new Vector2(s.HookX, s.HookY),
+                new Vector2(s.HookAx, s.HookAy), s.HookCl, s.HookAttached);
+        }
+    }
+
+    private static void ApplyBeaconSnap(Beacon b, BeaconSnap s)
+    {
+        b.ForceState(s.Owner, s.CaptureProgress, s.Contested);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Playback loop
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public override void _PhysicsProcess(double delta)
+    {
+        if (!_hasMatch || _timeline.Count == 0) return;
+
+        if (!_paused && _displayTick < _finalTick)
+        {
+            _displayTick++;
+            ApplySnapshot(_displayTick);
+        }
+
+        UpdateHud();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HUD
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void AddControlBar(CanvasLayer layer)
+    {
+        var bar = new PanelContainer();
+        bar.AnchorLeft = 0; bar.AnchorRight = 1;
+        bar.AnchorTop = 1; bar.AnchorBottom = 1;
+        bar.OffsetTop = -48; bar.OffsetBottom = 0;
+        bar.AddThemeStyleboxOverride("panel", new StyleBoxFlat
+        {
+            BgColor = new Color(0.05f, 0.07f, 0.09f, 0.9f),
+            ContentMarginLeft = 12, ContentMarginRight = 12,
+            ContentMarginTop = 6, ContentMarginBottom = 6
+        });
+        layer.AddChild(bar);
+
+        var hbox = new HBoxContainer();
+        hbox.AddThemeConstantOverride("separation", 12);
+        bar.AddChild(hbox);
+
+        _playPauseBtn = new Button { Text = "  ⏸  ", CustomMinimumSize = new Vector2(50, 0) };
+        _playPauseBtn.AddThemeFontSizeOverride("font_size", 16);
+        _playPauseBtn.Pressed += () => { _paused = !_paused; UpdatePlayPauseBtn(); };
+        hbox.AddChild(_playPauseBtn);
+
+        _tickLabel = new Label { Text = "0 / 0", CustomMinimumSize = new Vector2(140, 0) };
+        _tickLabel.AddThemeColorOverride("font_color", Colors.White);
+        _tickLabel.AddThemeFontSizeOverride("font_size", 13);
+        _tickLabel.VerticalAlignment = VerticalAlignment.Center;
+        hbox.AddChild(_tickLabel);
+
+        _scrubBar = new HSlider
+        {
+            MinValue = 0, MaxValue = Math.Max(1, _finalTick), Value = 0, Step = 1,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(200, 0)
+        };
+        _scrubBar.DragStarted += () => { _scrubbing = true; };
+        _scrubBar.DragEnded += (_) => { _scrubbing = false; };
+        _scrubBar.ValueChanged += (val) =>
+        {
+            if (_scrubbing)
+            {
+                _displayTick = (int)val;
+                ApplySnapshot(_displayTick);
+                UpdateHud();
+            }
+        };
+        hbox.AddChild(_scrubBar);
+
+        _divergenceLabel = new Label
+        {
+            Text = _diverged ? $"DIVERGED tick {_firstDivergenceTick}" : $"SYNC OK  |  {_checkpointsVerified} checkpoints",
+            CustomMinimumSize = new Vector2(280, 0),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        _divergenceLabel.AddThemeColorOverride("font_color", _diverged ? Colors.Red : Colors.LimeGreen);
+        _divergenceLabel.AddThemeFontSizeOverride("font_size", 13);
+        hbox.AddChild(_divergenceLabel);
+    }
+
+    private void UpdatePlayPauseBtn()
+    {
+        if (_playPauseBtn != null)
+            _playPauseBtn.Text = _paused ? "  ▶  " : "  ⏸  ";
+    }
+
+    private void UpdateHud()
+    {
+        if (_tickLabel != null)
+            _tickLabel.Text = $"Tick {_displayTick} / {_finalTick}  ({_displayTick / 60f:F1}s)";
+        if (_scrubBar != null && !_scrubbing)
+            _scrubBar.SetValueNoSignal(_displayTick);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Camera
+    // ═══════════════════════════════════════════════════════════════════════
 
     private void FitCameraToArena()
     {
         if (_camera == null) return;
-
-        float arenaW, arenaH;
+        float arenaW = 1500, arenaH = 680;
         if (_isBeaconBrawl && _beaconReplayData != null)
-        {
-            arenaW = _beaconReplayData.Arena.Width;
-            arenaH = _beaconReplayData.Arena.Height;
-        }
+        { arenaW = _beaconReplayData.Arena.Width; arenaH = _beaconReplayData.Arena.Height; }
         else if (_fightReplayData != null)
-        {
-            arenaW = _fightReplayData.Arena.Width;
-            arenaH = _fightReplayData.Arena.Height;
-        }
-        else return;
+        { arenaW = _fightReplayData.Arena.Width; arenaH = _fightReplayData.Arena.Height; }
 
-        // Center camera on arena
         _camera.Position = new Vector2(arenaW / 2f, arenaH / 2f);
-
-        // Zoom to fit arena in viewport with some padding
-        var viewport = GetViewportRect().Size;
-        if (viewport.X <= 0 || viewport.Y <= 0) return;
-        float zoomX = viewport.X / (arenaW + 40f);
-        float zoomY = viewport.Y / (arenaH + 40f);
-        float zoom = Mathf.Min(zoomX, zoomY);
-        zoom = Mathf.Clamp(zoom, ZoomMin, ZoomMax);
-        _camera.Zoom = new Vector2(zoom, zoom);
+        var vp = GetViewportRect().Size;
+        if (vp.X <= 0 || vp.Y <= 0) return;
+        float zoom = Mathf.Min(vp.X / (arenaW + 40f), vp.Y / (arenaH + 40f));
+        _camera.Zoom = new Vector2(Mathf.Clamp(zoom, ZoomMin, ZoomMax),
+                                    Mathf.Clamp(zoom, ZoomMin, ZoomMax));
     }
 
-    private void AddStatusLabel(CanvasLayer layer, float arenaHeight)
-    {
-        _statusLabel = new Label
-        {
-            Position = new Vector2(20, arenaHeight - 40),
-            Text = "REPLAY — Verifying..."
-        };
-        _statusLabel.AddThemeColorOverride("font_color", Colors.LimeGreen);
-        _statusLabel.AddThemeFontSizeOverride("font_size", 18);
-        layer.AddChild(_statusLabel);
-    }
-
-    // ── Simulation loop ──
-
-    public override void _PhysicsProcess(double delta)
-    {
-        if (!_hasMatch) return;
-
-        bool isOver = _isBeaconBrawl ? (_beaconMatch?.IsOver ?? true) : (_fightMatch?.IsOver ?? true);
-        if (isOver) { PrintSummaryOnce(); return; }
-        if (_paused) return;
-
-        StepOne();
-    }
-
-    private void StepOne()
-    {
-        if (_isBeaconBrawl)
-        {
-            if (_beaconMatch == null || _beaconMatch.IsOver) return;
-            _beaconMatch.Step();
-            CheckBeaconDivergence(_beaconMatch.Tick - 1);
-            if (_beaconMatch.IsOver) PrintSummaryOnce();
-        }
-        else
-        {
-            if (_fightMatch == null || _fightMatch.IsOver) return;
-            _fightMatch.Step();
-            CheckFightDivergence(_fightMatch.Tick - 1);
-            if (_fightMatch.IsOver) PrintSummaryOnce();
-        }
-    }
-
-    // ── Fight mode divergence ──
-
-    private void CheckFightDivergence(int tick)
-    {
-        if (_fightMatch == null) return;
-        if (!_fightCheckpoints.TryGetValue(tick, out var expected)) return;
-
-        var errors = new List<string>();
-        CheckFighter(errors, 0, _fightMatch.Fighter0, expected.F[0]);
-        CheckFighter(errors, 1, _fightMatch.Fighter1, expected.F[1]);
-        CheckFist(errors, "F0.L", _fightMatch.Fighter0.LeftFist, expected.Fists[0]);
-        CheckFist(errors, "F0.R", _fightMatch.Fighter0.RightFist, expected.Fists[1]);
-        CheckFist(errors, "F1.L", _fightMatch.Fighter1.LeftFist, expected.Fists[2]);
-        CheckFist(errors, "F1.R", _fightMatch.Fighter1.RightFist, expected.Fists[3]);
-
-        RecordCheckResult(tick, errors);
-    }
-
-    // ── Beacon Brawl divergence ──
-
-    private void CheckBeaconDivergence(int tick)
-    {
-        if (_beaconMatch == null) return;
-        if (!_beaconCheckpoints.TryGetValue(tick, out var expected)) return;
-
-        var errors = new List<string>();
-
-        // Scores
-        if (_beaconMatch.Scores[0] != expected.S[0])
-            errors.Add($"Score[0]: expected {expected.S[0]}, got {_beaconMatch.Scores[0]}");
-        if (_beaconMatch.Scores[1] != expected.S[1])
-            errors.Add($"Score[1]: expected {expected.S[1]}, got {_beaconMatch.Scores[1]}");
-
-        // Pawns
-        for (int i = 0; i < _beaconMatch.AllPawns.Length && i < expected.P.Count; i++)
-        {
-            var pawn = _beaconMatch.AllPawns[i];
-            var exp = expected.P[i];
-            string name = $"Pawn[{pawn.TeamIndex}.{pawn.PawnIndex}]";
-
-            if (MathF.Abs(pawn.Position.X - exp.X) > PosTolerance)
-                errors.Add($"{name}.X: expected {exp.X:F4}, got {pawn.Position.X:F4}");
-            if (MathF.Abs(pawn.Position.Y - exp.Y) > PosTolerance)
-                errors.Add($"{name}.Y: expected {exp.Y:F4}, got {pawn.Position.Y:F4}");
-            if (MathF.Abs(pawn.Velocity.X - exp.Vx) > VelTolerance)
-                errors.Add($"{name}.Vx: expected {exp.Vx:F4}, got {pawn.Velocity.X:F4}");
-            if (MathF.Abs(pawn.Velocity.Y - exp.Vy) > VelTolerance)
-                errors.Add($"{name}.Vy: expected {exp.Vy:F4}, got {pawn.Velocity.Y:F4}");
-            if (MathF.Abs(pawn.Health - exp.Hp) > HpTolerance)
-                errors.Add($"{name}.Hp: expected {exp.Hp:F4}, got {pawn.Health:F4}");
-            if (pawn.IsGrounded != exp.G)
-                errors.Add($"{name}.Grounded: expected {exp.G}, got {pawn.IsGrounded}");
-            if (pawn.IsDead != exp.D)
-                errors.Add($"{name}.Dead: expected {exp.D}, got {pawn.IsDead}");
-        }
-
-        // Hooks (grappler fists)
-        for (int i = 0; i < expected.F.Count; i++)
-        {
-            var expHook = expected.F[i];
-            if (expHook.Pi < 0 || expHook.Pi >= _beaconMatch.AllPawns.Length) continue;
-            var pawn = _beaconMatch.AllPawns[expHook.Pi];
-            if (pawn.Role != PawnRole.Grappler) continue;
-            var hook = pawn.Hook;
-            string name = $"Hook[{pawn.TeamIndex}.{pawn.PawnIndex}]";
-
-            if ((int)hook.ChainState != expHook.S)
-                errors.Add($"{name}.State: expected {expHook.S}, got {(int)hook.ChainState}");
-            if (MathF.Abs(hook.Position.X - expHook.X) > PosTolerance)
-                errors.Add($"{name}.X: expected {expHook.X:F4}, got {hook.Position.X:F4}");
-            if (MathF.Abs(hook.Position.Y - expHook.Y) > PosTolerance)
-                errors.Add($"{name}.Y: expected {expHook.Y:F4}, got {hook.Position.Y:F4}");
-            if (hook.IsAttachedToWorld != expHook.A)
-                errors.Add($"{name}.Attached: expected {expHook.A}, got {hook.IsAttachedToWorld}");
-        }
-
-        // Beacons
-        for (int i = 0; i < _beaconMatch.Beacons.Length && i < expected.B.Count; i++)
-        {
-            var beacon = _beaconMatch.Beacons[i];
-            var exp = expected.B[i];
-            if (beacon.OwnerTeam != exp.O)
-                errors.Add($"Beacon[{i}].Owner: expected {exp.O}, got {beacon.OwnerTeam}");
-        }
-
-        RecordCheckResult(tick, errors);
-    }
-
-    // ── Shared check helpers ──
+    // ═══════════════════════════════════════════════════════════════════════
+    // Divergence helpers (used during pre-sim only)
+    // ═══════════════════════════════════════════════════════════════════════
 
     private void CheckFighter(List<string> errors, int idx, Fighter actual, ReplayFighter expected)
     {
-        string prefix = $"Fighter{idx}";
-        if (MathF.Abs(actual.Position.X - expected.X) > PosTolerance)
-            errors.Add($"{prefix}.X: expected {expected.X:F4}, got {actual.Position.X:F4}");
-        if (MathF.Abs(actual.Position.Y - expected.Y) > PosTolerance)
-            errors.Add($"{prefix}.Y: expected {expected.Y:F4}, got {actual.Position.Y:F4}");
-        if (MathF.Abs(actual.Velocity.X - expected.Vx) > VelTolerance)
-            errors.Add($"{prefix}.Vx: expected {expected.Vx:F4}, got {actual.Velocity.X:F4}");
-        if (MathF.Abs(actual.Velocity.Y - expected.Vy) > VelTolerance)
-            errors.Add($"{prefix}.Vy: expected {expected.Vy:F4}, got {actual.Velocity.Y:F4}");
-        if (MathF.Abs(actual.Health - expected.Hp) > HpTolerance)
-            errors.Add($"{prefix}.Hp: expected {expected.Hp:F4}, got {actual.Health:F4}");
-        if (actual.IsGrounded != expected.G)
-            errors.Add($"{prefix}.Grounded: expected {expected.G}, got {actual.IsGrounded}");
+        string p = $"F{idx}";
+        if (MathF.Abs(actual.Position.X - expected.X) > PosTolerance) errors.Add($"{p}.X: {expected.X:F2} vs {actual.Position.X:F2}");
+        if (MathF.Abs(actual.Position.Y - expected.Y) > PosTolerance) errors.Add($"{p}.Y: {expected.Y:F2} vs {actual.Position.Y:F2}");
+        if (MathF.Abs(actual.Velocity.X - expected.Vx) > VelTolerance) errors.Add($"{p}.Vx: {expected.Vx:F2} vs {actual.Velocity.X:F2}");
+        if (MathF.Abs(actual.Velocity.Y - expected.Vy) > VelTolerance) errors.Add($"{p}.Vy: {expected.Vy:F2} vs {actual.Velocity.Y:F2}");
+        if (MathF.Abs(actual.Health - expected.Hp) > HpTolerance) errors.Add($"{p}.Hp: {expected.Hp:F2} vs {actual.Health:F2}");
+        if (actual.IsGrounded != expected.G) errors.Add($"{p}.Gnd: {expected.G} vs {actual.IsGrounded}");
     }
 
     private void CheckFist(List<string> errors, string name, Fist actual, ReplayFist expected)
     {
-        if ((int)actual.ChainState != expected.S)
-            errors.Add($"{name}.ChainState: expected {expected.S}, got {(int)actual.ChainState}");
-        if (MathF.Abs(actual.Position.X - expected.X) > PosTolerance)
-            errors.Add($"{name}.X: expected {expected.X:F4}, got {actual.Position.X:F4}");
-        if (MathF.Abs(actual.Position.Y - expected.Y) > PosTolerance)
-            errors.Add($"{name}.Y: expected {expected.Y:F4}, got {actual.Position.Y:F4}");
-        if (MathF.Abs(actual.AnchorPoint.X - expected.Ax) > ChainTolerance)
-            errors.Add($"{name}.Ax: expected {expected.Ax:F4}, got {actual.AnchorPoint.X:F4}");
-        if (MathF.Abs(actual.AnchorPoint.Y - expected.Ay) > ChainTolerance)
-            errors.Add($"{name}.Ay: expected {expected.Ay:F4}, got {actual.AnchorPoint.Y:F4}");
-        if (MathF.Abs(actual.ChainLength - expected.Cl) > ChainTolerance)
-            errors.Add($"{name}.ChainLen: expected {expected.Cl:F4}, got {actual.ChainLength:F4}");
-        if (actual.IsAttachedToWorld != expected.A)
-            errors.Add($"{name}.Attached: expected {expected.A}, got {actual.IsAttachedToWorld}");
+        if ((int)actual.ChainState != expected.S) errors.Add($"{name}.St: {expected.S} vs {(int)actual.ChainState}");
+        if (MathF.Abs(actual.Position.X - expected.X) > PosTolerance) errors.Add($"{name}.X: {expected.X:F2} vs {actual.Position.X:F2}");
+        if (MathF.Abs(actual.Position.Y - expected.Y) > PosTolerance) errors.Add($"{name}.Y: {expected.Y:F2} vs {actual.Position.Y:F2}");
+        if (MathF.Abs(actual.ChainLength - expected.Cl) > ChainTolerance) errors.Add($"{name}.Cl: {expected.Cl:F2} vs {actual.ChainLength:F2}");
+        if (actual.IsAttachedToWorld != expected.A) errors.Add($"{name}.At: {expected.A} vs {actual.IsAttachedToWorld}");
     }
 
     private void RecordCheckResult(int tick, List<string> errors)
@@ -487,172 +757,88 @@ public partial class ReplayRunner : Node2D
         if (errors.Count > 0)
         {
             _checkpointsFailed++;
-            if (!_diverged)
-            {
-                _diverged = true;
-                _firstDivergenceTick = tick;
-                GD.PrintErr($"!!! DIVERGENCE DETECTED at tick {tick} !!!");
-            }
-            foreach (var err in errors)
-            {
-                GD.PrintErr($"  [{tick}] {err}");
-                _divergenceLog.Add($"[{tick}] {err}");
-            }
-            UpdateStatusLabel();
+            if (!_diverged) { _diverged = true; _firstDivergenceTick = tick; GD.PrintErr($"!!! DIVERGENCE at tick {tick} !!!"); }
+            foreach (var err in errors) { GD.PrintErr($"  [{tick}] {err}"); _divergenceLog.Add($"[{tick}] {err}"); }
         }
-        else
-        {
-            _checkpointsVerified++;
-        }
+        else _checkpointsVerified++;
     }
 
-    // ── UI ──
-
-    private void UpdateStatusLabel()
-    {
-        if (_statusLabel == null) return;
-        if (_diverged)
-        {
-            _statusLabel.Text = $"DIVERGED at tick {_firstDivergenceTick}  |  {_checkpointsFailed} checkpoints failed";
-            _statusLabel.RemoveThemeColorOverride("font_color");
-            _statusLabel.AddThemeColorOverride("font_color", Colors.Red);
-        }
-    }
-
-    private void PrintSummaryOnce()
-    {
-        if (_summaryPrinted) return;
-        _summaryPrinted = true;
-
-        int total = _checkpointsVerified + _checkpointsFailed;
-        string mode = _isBeaconBrawl ? "Beacon Brawl" : "Fight";
-        GD.Print($"=== REPLAY COMPLETE ({mode}) ===");
-        GD.Print($"  Checkpoints: {total} total, {_checkpointsVerified} passed, {_checkpointsFailed} failed");
-
-        if (_diverged)
-        {
-            GD.PrintErr($"  RESULT: DIVERGED (first at tick {_firstDivergenceTick})");
-            GD.PrintErr($"  Errors logged: {_divergenceLog.Count}");
-        }
-        else
-        {
-            GD.Print("  RESULT: DETERMINISTIC — all checkpoints match");
-        }
-
-        if (_statusLabel != null && !_diverged)
-        {
-            _statusLabel.Text = $"DETERMINISTIC — {total} checkpoints verified";
-            _statusLabel.RemoveThemeColorOverride("font_color");
-            _statusLabel.AddThemeColorOverride("font_color", Colors.LimeGreen);
-        }
-    }
+    // ═══════════════════════════════════════════════════════════════════════
+    // Error display
+    // ═══════════════════════════════════════════════════════════════════════
 
     private void ShowError(string message)
     {
         GD.PrintErr(message);
-
-        var canvasLayer = new CanvasLayer();
-        AddChild(canvasLayer);
-
-        var bg = new ColorRect
-        {
-            Color = new Color(0.05f, 0.07f, 0.09f),
-            AnchorsPreset = (int)Control.LayoutPreset.FullRect
-        };
-        canvasLayer.AddChild(bg);
-
-        var label = new Label
-        {
-            Text = message,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            AnchorsPreset = (int)Control.LayoutPreset.FullRect
-        };
-        label.AddThemeColorOverride("font_color", new Color(0.97f, 0.32f, 0.29f));
-        label.AddThemeFontSizeOverride("font_size", 20);
-        canvasLayer.AddChild(label);
-
-        var hint = new Label
-        {
-            Text = "Press Escape to close",
-            Position = new Vector2(0, 600),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Size = new Vector2(1500, 40)
-        };
+        var cl = new CanvasLayer(); AddChild(cl);
+        var bg = new ColorRect { Color = new Color(0.05f, 0.07f, 0.09f), AnchorsPreset = (int)Control.LayoutPreset.FullRect };
+        cl.AddChild(bg);
+        var lbl = new Label { Text = message, HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center, AnchorsPreset = (int)Control.LayoutPreset.FullRect };
+        lbl.AddThemeColorOverride("font_color", new Color(0.97f, 0.32f, 0.29f));
+        lbl.AddThemeFontSizeOverride("font_size", 20);
+        cl.AddChild(lbl);
+        var hint = new Label { Text = "Press Escape to close", Position = new Vector2(0, 600),
+            HorizontalAlignment = HorizontalAlignment.Center, Size = new Vector2(2000, 40) };
         hint.AddThemeColorOverride("font_color", new Color(0.55f, 0.58f, 0.62f));
         hint.AddThemeFontSizeOverride("font_size", 14);
-        canvasLayer.AddChild(hint);
+        cl.AddChild(hint);
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Input
+    // ═══════════════════════════════════════════════════════════════════════
 
     public override void _UnhandledInput(InputEvent @event)
     {
-        // ── Mouse pan & zoom ──
         if (@event is InputEventMouseButton mb && _camera != null)
         {
             switch (mb.ButtonIndex)
             {
                 case MouseButton.Middle:
                     _dragging = mb.Pressed;
-                    if (mb.Pressed)
-                        _dragStart = mb.GlobalPosition;
                     break;
-                case MouseButton.WheelUp:
-                    if (mb.Pressed)
-                    {
-                        var z = _camera.Zoom;
-                        _camera.Zoom = new Vector2(
-                            Mathf.Clamp(z.X + ZoomStep, ZoomMin, ZoomMax),
-                            Mathf.Clamp(z.Y + ZoomStep, ZoomMin, ZoomMax));
-                    }
+                case MouseButton.WheelUp when mb.Pressed:
+                    var zu = _camera.Zoom;
+                    _camera.Zoom = new Vector2(Mathf.Clamp(zu.X + ZoomStep, ZoomMin, ZoomMax),
+                                                Mathf.Clamp(zu.Y + ZoomStep, ZoomMin, ZoomMax));
                     break;
-                case MouseButton.WheelDown:
-                    if (mb.Pressed)
-                    {
-                        var z = _camera.Zoom;
-                        _camera.Zoom = new Vector2(
-                            Mathf.Clamp(z.X - ZoomStep, ZoomMin, ZoomMax),
-                            Mathf.Clamp(z.Y - ZoomStep, ZoomMin, ZoomMax));
-                    }
+                case MouseButton.WheelDown when mb.Pressed:
+                    var zd = _camera.Zoom;
+                    _camera.Zoom = new Vector2(Mathf.Clamp(zd.X - ZoomStep, ZoomMin, ZoomMax),
+                                                Mathf.Clamp(zd.Y - ZoomStep, ZoomMin, ZoomMax));
                     break;
             }
         }
 
         if (@event is InputEventMouseMotion mm && _dragging && _camera != null)
-        {
             _camera.Position -= mm.Relative / _camera.Zoom;
-        }
 
-        // ── Keyboard ──
         if (@event is InputEventKey { Pressed: true } key)
         {
             switch (key.Keycode)
             {
                 case Key.Space when _hasMatch:
-                    _paused = !_paused;
-                    GD.Print(_paused ? "PAUSED" : "RUNNING");
+                    _paused = !_paused; UpdatePlayPauseBtn(); break;
+                case Key.Right when _hasMatch:
+                    _paused = true; UpdatePlayPauseBtn();
+                    if (_displayTick < _finalTick) { _displayTick++; ApplySnapshot(_displayTick); }
                     break;
-                case Key.Right when _paused && _hasMatch:
-                    StepOne();
-                    break;
-                case Key.Left when _paused && _hasMatch:
-                    GD.Print("(Left = restart from beginning)");
-                    StartReplay();
-                    break;
-                case Key.R when _hasMatch:
-                    StartReplay();
+                case Key.Left when _hasMatch:
+                    _paused = true; UpdatePlayPauseBtn();
+                    if (_displayTick > 0) { _displayTick--; ApplySnapshot(_displayTick); }
                     break;
                 case Key.Home when _camera != null:
-                    FitCameraToArena();
-                    break;
+                    FitCameraToArena(); break;
+                case Key.R when _hasMatch:
+                    _displayTick = 0; ApplySnapshot(0); break;
                 case Key.Escape:
-                    GetTree().Quit();
-                    break;
+                    GetTree().Quit(); break;
             }
         }
     }
 }
 
-// Config file model
 internal record ReplayConfig
 {
     public string? BattleLogPath { get; init; }
