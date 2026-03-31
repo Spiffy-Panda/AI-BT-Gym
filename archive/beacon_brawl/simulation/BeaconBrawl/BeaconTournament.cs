@@ -19,7 +19,7 @@ public static class BeaconTournament
 {
     public static GenerationSummary RunGeneration(
         List<BeaconTeamEntry> teams, int generation, string outputPath,
-        int bestOf = 5, int? masterSeed = null)
+        int bestOf = 5, int? masterSeed = null, ArenaConfig? modifiers = null)
     {
         int seed = masterSeed ?? Environment.TickCount;
         var seedRng = new Random(seed);
@@ -76,7 +76,7 @@ public static class BeaconTournament
                     int matchSeed = seedRng.Next();
                     string matchId = $"gen_{generation:D3}_match_{matchNum:D3}_g{game + 1}";
 
-                    var arena = new BeaconArena();
+                    var arena = new BeaconArena(modifiers: modifiers);
                     var match = new BeaconMatch(arena,
                         teams[i].PawnTrees, teams[i].PawnRoles,
                         teams[j].PawnTrees, teams[j].PawnRoles,

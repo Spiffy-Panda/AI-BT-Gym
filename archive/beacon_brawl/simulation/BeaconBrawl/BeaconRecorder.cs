@@ -475,7 +475,8 @@ public class BeaconRecorder
             PlatformRect = [arena.Platform.Position.X, arena.Platform.Position.Y, arena.Platform.Size.X, arena.Platform.Size.Y],
             BeaconCenters = arena.BeaconZones.Select(z => new[] { z.Center.X, z.Center.Y }).ToArray(),
             BeaconMultipliers = arena.BeaconZones.Select(z => z.PointMultiplier).ToArray(),
-            BaseZoneCenters = arena.BaseZones.Select(z => new[] { z.Center.X, z.Center.Y }).ToArray()
+            BaseZoneCenters = arena.BaseZones.Select(z => new[] { z.Center.X, z.Center.Y }).ToArray(),
+            Modifiers = arena.Modifiers.HasModifiers ? arena.Modifiers : null
         },
         TeamSize = _teamSize,
         CheckpointInterval = CheckpointInterval,

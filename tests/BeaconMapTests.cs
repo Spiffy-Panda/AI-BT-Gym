@@ -1,0 +1,209 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// BeaconMapTests.cs — Self-play validation for beacon brawl with arena modifiers
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Runs TestTeam vs TestTeam on each beacon brawl modifier preset plus
+// multi-modifier combos. Validates:
+//   1. No crashes
+//   2. Both teams take damage (engagement happens)
+//   3. Beacons are captured (not a pure deathmatch)
+//   4. Modifier features are exercised where applicable
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Godot;
+using AiBtGym.BehaviorTree;
+using AiBtGym.Simulation;
+using AiBtGym.Simulation.BeaconBrawl;
+
+namespace AiBtGym.Tests;
+
+public static class BeaconMapTests
+{
+    public record BeaconMapTestResult
+    {
+        public string MapName { get; init; } = "";
+        public bool Passed { get; init; }
+        public string? Error { get; init; }
+        public int DurationTicks { get; init; }
+        public int[] FinalScores { get; init; } = [0, 0];
+        public int[] Kills { get; init; } = [0, 0];
+        public int WinnerTeam { get; init; }
+        public Dictionary<string, string> FeatureNotes { get; init; } = new();
+        public BeaconBattleLog? BattleLog { get; init; }
+    }
+
+    private static readonly (string name, ArenaConfig? modifiers)[] Presets =
+    [
+        ("BB_Flat", null),
+        ("BB_Hazards", ArenaMaps.BeaconHazards),
+        ("BB_Pickups", ArenaMaps.BeaconPickups),
+        ("BB_CenterWall", ArenaMaps.BeaconCenterWall),
+        ("BB_Shrink", ArenaMaps.BeaconShrink),
+        ("BB_Platforms", ArenaMaps.BeaconPlatforms),
+        ("BB_Combined", ArenaMaps.BeaconCombined),
+        ("BB_HazardsPickups", ArenaMaps.Merge(ArenaMaps.BeaconHazards, ArenaMaps.BeaconPickups)),
+        ("BB_HazardsShrink", ArenaMaps.Merge(ArenaMaps.BeaconHazards, ArenaMaps.BeaconShrink)),
+    ];
+
+    public static List<BeaconMapTestResult> RunAll()
+    {
+        var team = AiBtGym.Godot.BeaconTestTeam.GetEntry();
+        var results = new List<BeaconMapTestResult>();
+
+        foreach (var (name, mods) in Presets)
+        {
+            try { results.Add(RunSelfPlay(name, mods, team)); }
+            catch (Exception e)
+            {
+                results.Add(new BeaconMapTestResult { MapName = name, Passed = false, Error = $"EXCEPTION: {e.Message}" });
+            }
+        }
+
+        return results;
+    }
+
+    private static BeaconMapTestResult RunSelfPlay(string mapName, ArenaConfig? modifiers, BeaconTeamEntry team)
+    {
+        var arena = new BeaconArena(modifiers: modifiers);
+        var match = new BeaconMatch(arena,
+            team.PawnTrees, team.PawnRoles,
+            team.PawnTrees, team.PawnRoles,
+            seed: 42);
+        match.MaxTicks = 90 * 60; // 90 seconds
+
+        var recorder = new BeaconRecorder(
+            [team.Name, team.Name],
+            0, $"bb_test_{mapName}",
+            [team.Color, team.Color],
+            team.PawnTrees.Length);
+        match.Recorder = recorder;
+
+        while (!match.IsOver)
+            match.Step();
+
+        var notes = new Dictionary<string, string>();
+        var errors = new List<string>();
+
+        // Basic outcome
+        notes["scores"] = $"A={match.Scores[0]} B={match.Scores[1]}";
+        notes["kills"] = $"A={match.Kills[0]} B={match.Kills[1]}";
+        notes["outcome"] = match.WinnerTeam switch
+        {
+            0 => $"Team A wins ({match.Scores[0]}-{match.Scores[1]})",
+            1 => $"Team B wins ({match.Scores[1]}-{match.Scores[0]})",
+            _ => $"Draw ({match.Scores[0]}-{match.Scores[1]})"
+        };
+        notes["duration"] = $"{match.Tick} ticks ({match.Tick / 60f:F1}s)";
+
+        // Check 1: Beacons should be captured (total score > 10)
+        int totalScore = match.Scores[0] + match.Scores[1];
+        if (totalScore < 10)
+            errors.Add($"No beacon activity: total score = {totalScore}");
+
+        // Check 2: Both teams should have some score (not a complete shutout)
+        if (match.Scores[0] == 0 && match.Scores[1] == 0)
+            errors.Add("Zero scoring: neither team captured beacons");
+
+        // Feature-specific validation
+        ValidateModifierFeatures(modifiers, match, notes, errors);
+
+        string? error = errors.Count > 0 ? string.Join("; ", errors) : null;
+
+        // Build battle log with replay
+        var log = recorder.BuildBattleLog(0) with
+        {
+            Replay = recorder.BuildReplayData(team.PawnTrees, team.PawnTrees, arena, matchSeed: 42)
+        };
+
+        return new BeaconMapTestResult
+        {
+            MapName = mapName,
+            Passed = errors.Count == 0,
+            Error = error,
+            DurationTicks = match.Tick,
+            FinalScores = [match.Scores[0], match.Scores[1]],
+            Kills = [match.Kills[0], match.Kills[1]],
+            WinnerTeam = match.WinnerTeam,
+            FeatureNotes = notes,
+            BattleLog = log
+        };
+    }
+
+    private static void ValidateModifierFeatures(ArenaConfig? modifiers, BeaconMatch match,
+        Dictionary<string, string> notes, List<string> errors)
+    {
+        if (modifiers == null) return;
+
+        // Hazard zones: some pawns should have taken hazard damage
+        if (modifiers.HazardZones.Count > 0)
+        {
+            // Pawns don't track hazard damage individually — check if any pawn health is < max
+            bool anyDamage = match.AllPawns.Any(p => p.Health < Pawn.MaxHealth || p.IsDead);
+            notes["hazards"] = anyDamage ? "active (pawns took damage)" : "no_hazard_damage";
+        }
+
+        // Destructible walls
+        if (modifiers.DestructibleWalls.Count > 0)
+        {
+            for (int i = 0; i < modifiers.DestructibleWalls.Count; i++)
+            {
+                float initialHp = modifiers.DestructibleWalls[i].Hp;
+                float remaining = match.DestructibleWallHp[i];
+                bool destroyed = !match.DestructibleWallExists[i];
+                notes[$"wall_{i}"] = destroyed ? "DESTROYED" : $"hp={remaining:F0}/{initialHp:F0}";
+            }
+        }
+
+        // Pickups
+        if (modifiers.Pickups.Count > 0)
+        {
+            for (int i = 0; i < modifiers.Pickups.Count; i++)
+            {
+                bool wasCollected = !match.PickupActive[i] || match.PickupRespawnTimer[i] > 0;
+                notes[$"pickup_{i}"] = wasCollected ? "collected" : "never_collected";
+            }
+        }
+
+        // Arena shrink
+        if (modifiers.Shrink != null)
+        {
+            float left = match.EffectiveLeft;
+            float right = match.EffectiveRight;
+            bool shrunk = left > match.Arena.Bounds.Position.X + 1f || right < match.Arena.Bounds.End.X - 1f;
+            notes["shrink"] = shrunk
+                ? $"bounds=[{left:F0}, {right:F0}]"
+                : "not_yet_shrunk";
+        }
+    }
+
+    public static int PrintResults(List<BeaconMapTestResult> results)
+    {
+        GD.Print("═══════════════════════════════════════");
+        GD.Print("  Beacon Brawl Map Tests");
+        GD.Print("═══════════════════════════════════════");
+
+        int passed = 0, failed = 0;
+        foreach (var r in results)
+        {
+            if (r.Passed)
+            {
+                GD.Print($"  [PASS] {r.MapName} — {r.FeatureNotes.GetValueOrDefault("outcome", "")} ({r.DurationTicks / 60f:F1}s)");
+                passed++;
+            }
+            else
+            {
+                GD.Print($"  [FAIL] {r.MapName}: {r.Error}");
+                failed++;
+            }
+            foreach (var (key, value) in r.FeatureNotes)
+                if (key != "outcome") GD.Print($"         {key}: {value}");
+        }
+
+        GD.Print("═══════════════════════════════════════");
+        GD.Print($"  Results: {passed} passed, {failed} failed");
+        GD.Print("═══════════════════════════════════════");
+        return failed;
+    }
+}

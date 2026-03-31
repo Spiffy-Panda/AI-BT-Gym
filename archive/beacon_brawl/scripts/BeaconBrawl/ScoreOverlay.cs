@@ -13,6 +13,7 @@ public partial class ScoreOverlay : Control
     private Label? _labelBeacons;
     private Label? _labelTime;
     private Label? _labelDebug;
+    private Label? _labelArenaConfig;
 
     public BeaconMatch? Match { get; set; }
     public Color TeamAColor { get; set; } = new(0.9f, 0.2f, 0.2f);
@@ -38,6 +39,11 @@ public partial class ScoreOverlay : Control
         _labelDebug = new Label { Position = new Vector2(20, 10) };
         _labelDebug.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f, 0.6f));
         AddChild(_labelDebug);
+
+        _labelArenaConfig = new Label { Position = new Vector2(20, 130) };
+        _labelArenaConfig.AddThemeColorOverride("font_color", new Color(0.5f, 0.7f, 0.5f, 0.7f));
+        _labelArenaConfig.AddThemeFontSizeOverride("font_size", 12);
+        AddChild(_labelArenaConfig);
     }
 
     public override void _Process(double delta)
@@ -101,5 +107,27 @@ public partial class ScoreOverlay : Control
                      (p.IsParryActive ? "[PARRY] " : "") + "\n";
         }
         _labelDebug!.Text = debug;
+
+        // Arena config (modifiers)
+        if (_labelArenaConfig != null && Match != null)
+        {
+            var mods = Match.Arena.Modifiers;
+            if (mods.HasModifiers)
+            {
+                var parts = new System.Collections.Generic.List<string>();
+                if (mods.Platforms.Count > 0) parts.Add($"Platforms:{mods.Platforms.Count}");
+                if (mods.HazardZones.Count > 0) parts.Add($"Hazards:{mods.HazardZones.Count}");
+                if (mods.DestructibleWalls.Count > 0) parts.Add($"Walls:{mods.DestructibleWalls.Count}");
+                if (mods.Pickups.Count > 0) parts.Add($"Pickups:{mods.Pickups.Count}");
+                if (mods.Shrink != null) parts.Add("Shrink");
+                if (mods.Ceiling != null) parts.Add("Ceiling");
+                if (mods.CornerBumpers.Count > 0) parts.Add($"Bumpers:{mods.CornerBumpers.Count}");
+                _labelArenaConfig.Text = $"Modifiers: {string.Join(" | ", parts)}";
+            }
+            else
+            {
+                _labelArenaConfig.Text = "Arena: Flat (no modifiers)";
+            }
+        }
     }
 }

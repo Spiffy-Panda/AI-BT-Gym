@@ -43,6 +43,14 @@ public class BeaconMatch
 
     private readonly BehaviorTreeRunner[] _btRunners;
 
+    // ── Modifier mutable state ──
+    public float[] DestructibleWallHp { get; private set; } = [];
+    public bool[] DestructibleWallExists { get; private set; } = [];
+    public bool[] PickupActive { get; private set; } = [];
+    public int[] PickupRespawnTimer { get; private set; } = [];
+    public float EffectiveLeft { get; set; }
+    public float EffectiveRight { get; set; }
+
     /// <summary>
     /// Create a match. Each team has PawnTrees and PawnRoles arrays (same length, one per pawn).
     /// PawnRoles[i] specifies whether pawn i is a Grappler or Gunner.
@@ -91,6 +99,23 @@ public class BeaconMatch
             _btRunners[i] = new BehaviorTreeRunner(teamATrees[i]);
             _btRunners[teamSize + i] = new BehaviorTreeRunner(teamBTrees[i]);
         }
+
+        InitModifierState();
+    }
+
+    private void InitModifierState()
+    {
+        var mods = Arena.Modifiers;
+        int wallCount = mods.DestructibleWalls.Count;
+        DestructibleWallHp = new float[wallCount];
+        DestructibleWallExists = new bool[wallCount];
+        for (int i = 0; i < wallCount; i++) { DestructibleWallHp[i] = mods.DestructibleWalls[i].Hp; DestructibleWallExists[i] = true; }
+        int pickupCount = mods.Pickups.Count;
+        PickupActive = new bool[pickupCount];
+        PickupRespawnTimer = new int[pickupCount];
+        for (int i = 0; i < pickupCount; i++) PickupActive[i] = true;
+        EffectiveLeft = Arena.Bounds.Position.X;
+        EffectiveRight = Arena.Bounds.End.X;
     }
 
     /// <summary>Advance the match by one simulation tick.</summary>
@@ -179,7 +204,7 @@ public class BeaconMatch
         }
 
         // ── Projectile physics ──
-        BeaconPhysics.TickProjectiles(Projectiles, AllPawns, Arena, Recorder, Tick);
+        BeaconPhysics.TickProjectiles(Projectiles, AllPawns, Arena, this, Recorder, Tick);
 
         // ── Body-body collisions ──
         for (int i = 0; i < TeamA.Length; i++)
@@ -225,7 +250,7 @@ public class BeaconMatch
                 }
 
                 int lockoutBefore = pawn.RifleLockoutTicks;
-                var hitPawn = BeaconPhysics.FireRifle(pawn, pawn.RifleChargeDir, AllPawns, Arena, out var segments);
+                var hitPawn = BeaconPhysics.FireRifle(pawn, pawn.RifleChargeDir, AllPawns, Arena, DestructibleWallExists, out var segments);
                 Recorder?.RecordRifleShot(Tick, pawn.TeamIndex, pawn.PawnIndex, segments, hitPawn);
                 if (hitPawn != null)
                     Recorder?.RecordDamage(pawn.TeamIndex, Pawn.RifleDamage);
@@ -289,11 +314,97 @@ public class BeaconMatch
             BeaconPhysics.ApplyRegen(pawn, ownedBeacons, inBase, BeaconPhysics.FixedDt);
         }
 
+        // ── Modifier ticks ──
+        TickHazardZones();
+        TickPickups();
+        TickArenaShrink();
+
         // ── Record tick ──
         Recorder?.RecordTick(this);
 
         Tick++;
         CheckWinConditions();
+    }
+
+    // ── Modifier: Hazard zones ──
+    private void TickHazardZones()
+    {
+        if (Arena.Modifiers.HazardZones.Count == 0) return;
+        foreach (var pawn in AllPawns)
+        {
+            if (pawn.IsDead || !Arena.IsOnGround(pawn.Position, pawn.BodyRadius)) continue;
+            float dmgRate = Arena.GetHazardDamageRate(pawn.Position);
+            if (dmgRate > 0)
+            {
+                pawn.TakeDamage(dmgRate * BeaconPhysics.FixedDt);
+                if (Tick % 30 == 0) pawn.Velocity += new Vector2(0, -40f);
+            }
+        }
+    }
+
+    // ── Modifier: Pickups ──
+    private void TickPickups()
+    {
+        var pickups = Arena.Modifiers.Pickups;
+        if (pickups.Count == 0) return;
+        for (int i = 0; i < pickups.Count; i++)
+        {
+            if (!PickupActive[i]) { PickupRespawnTimer[i]--; if (PickupRespawnTimer[i] <= 0) PickupActive[i] = true; }
+        }
+        foreach (var pawn in AllPawns)
+        {
+            if (pawn.IsDead) continue;
+            for (int i = 0; i < pickups.Count; i++)
+            {
+                if (!PickupActive[i]) continue;
+                if (pawn.Position.DistanceTo(new Vector2(pickups[i].X, pickups[i].Y)) < pawn.BodyRadius + 12f)
+                {
+                    float heal = Mathf.Min(pickups[i].HealAmount, Pawn.MaxHealth - pawn.Health);
+                    if (heal > 0) pawn.Health = Mathf.Min(Pawn.MaxHealth, pawn.Health + heal);
+                    pawn.Velocity += new Vector2(0, -80f);
+                    PickupActive[i] = false;
+                    PickupRespawnTimer[i] = (int)(pickups[i].RespawnSeconds * 60f);
+                    break;
+                }
+            }
+        }
+    }
+
+    // ── Modifier: Arena shrink ──
+    private void TickArenaShrink()
+    {
+        if (Arena.Modifiers.Shrink is not ArenaShrinkConfig shrink) return;
+        int startTick = (int)(MaxTicks * shrink.StartFraction);
+        if (Tick < startTick) return;
+        int stepInterval = (int)(shrink.StepIntervalSeconds * 60f);
+        if (stepInterval <= 0) return;
+        int steps = (Tick - startTick) / stepInterval;
+        float totalShrink = steps * shrink.ShrinkPerStep;
+        float center = Arena.Bounds.Position.X + Arena.Bounds.Size.X / 2f;
+        float halfMin = shrink.MinWidth / 2f;
+        EffectiveLeft = Mathf.Min(Arena.Bounds.Position.X + totalShrink, center - halfMin);
+        EffectiveRight = Mathf.Max(Arena.Bounds.End.X - totalShrink, center + halfMin);
+    }
+
+    // ── Modifier: Destructible wall body collision ──
+    private void ClampToDestructibleWalls(ref Vector2 pos, ref Vector2 vel, float radius)
+    {
+        var walls = Arena.Modifiers.DestructibleWalls;
+        for (int i = 0; i < walls.Count; i++)
+        {
+            if (!DestructibleWallExists[i]) continue;
+            var w = walls[i];
+            float wL = w.X - w.Thickness / 2f, wR = w.X + w.Thickness / 2f;
+            float wT = w.BottomY - w.Height, wB = w.BottomY;
+            if (pos.Y + radius > wT && pos.Y - radius < wB && pos.X + radius > wL && pos.X - radius < wR)
+            {
+                float pushL = wL - radius - pos.X, pushR = wR + radius - pos.X;
+                if (Mathf.Abs(pushL) < Mathf.Abs(pushR))
+                { pos = new Vector2(wL - radius, pos.Y); vel = new Vector2(Mathf.Min(0, vel.X), vel.Y); }
+                else
+                { pos = new Vector2(wR + radius, pos.Y); vel = new Vector2(Mathf.Max(0, vel.X), vel.Y); }
+            }
+        }
     }
 
     private void TickPawn(Pawn p)
@@ -310,28 +421,48 @@ public class BeaconMatch
         if (p.Role == PawnRole.Grappler)
             BeaconPhysics.ApplyChainConstraint(p, p.Hook, BeaconPhysics.FixedDt);
 
-        // Platform collision
-        pos = p.Position;
-        vel = p.Velocity;
+        // Center platform collision
+        pos = p.Position; vel = p.Velocity;
         Arena.ResolvePlatformCollision(ref pos, ref vel, p.BodyRadius);
-        p.Position = pos;
-        p.Velocity = vel;
+        p.Position = pos; p.Velocity = vel;
+
+        // Modifier platform collision
+        pos = p.Position; vel = p.Velocity;
+        Arena.ClampToModifierPlatforms(ref pos, ref vel, p.BodyRadius);
+        p.Position = pos; p.Velocity = vel;
+
+        // Modifier destructible wall collision
+        pos = p.Position; vel = p.Velocity;
+        ClampToDestructibleWalls(ref pos, ref vel, p.BodyRadius);
+        p.Position = pos; p.Velocity = vel;
 
         // Arena bounds
-        pos = p.Position;
-        vel = p.Velocity;
+        pos = p.Position; vel = p.Velocity;
         Arena.ClampToArena(ref pos, ref vel, p.BodyRadius);
-        p.Position = pos;
-        p.Velocity = vel;
+        p.Position = pos; p.Velocity = vel;
 
-        // Ground check
+        // Modifier shrink bounds
+        if (Arena.Modifiers.Shrink != null)
+        {
+            pos = p.Position; vel = p.Velocity;
+            Arena.ClampToEffectiveBounds(ref pos, ref vel, p.BodyRadius, EffectiveLeft, EffectiveRight);
+            p.Position = pos; p.Velocity = vel;
+        }
+
+        // Ground check: floor OR center platform OR modifier platforms
         p.IsGrounded = Arena.IsOnGround(p.Position, p.BodyRadius) ||
-                        Arena.IsOnPlatform(p.Position, p.BodyRadius);
+                        Arena.IsOnPlatform(p.Position, p.BodyRadius) ||
+                        Arena.IsOnModifierPlatform(p.Position, p.BodyRadius, p.Velocity);
 
         // Override grounding when being grapple-pulled
         if (p.Role == PawnRole.Grappler &&
             p.Hook.IsAttachedToWorld && p.Hook.ChainState == FistChainState.Retracting)
             p.IsGrounded = false;
+
+        // Wall friction from modifiers
+        float frictionMult = Arena.GetWallFrictionMultiplier(p.Position, p.BodyRadius);
+        if (frictionMult < 1f && p.Velocity.Y > 0)
+            p.Velocity = new Vector2(p.Velocity.X, p.Velocity.Y * frictionMult);
 
         // Tick hook
         if (p.Role == PawnRole.Grappler)

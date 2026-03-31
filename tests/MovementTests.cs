@@ -47,7 +47,11 @@ public partial class MovementTests : Node
         var mapResults = MapTests.RunAll();
         int mapFailed = MapTests.PrintResults(mapResults);
 
-        GetTree().Quit((failed + mapFailed) > 0 ? 1 : 0);
+        // Run beacon brawl map tests
+        var bbResults = BeaconMapTests.RunAll();
+        int bbFailed = BeaconMapTests.PrintResults(bbResults);
+
+        GetTree().Quit((failed + mapFailed + bbFailed) > 0 ? 1 : 0);
     }
 
     // ── Public API ──

@@ -63,6 +63,10 @@ public partial class ReplayRunner : Node2D
     private const float HpTolerance = 0.01f;
     private const float ChainTolerance = 0.01f;
 
+    // ── Replay metadata (for screenshots) ──
+    private string _matchName = "";
+    private string _battleLogPath = "";
+
     // ── Replay data ──
     private ReplayData? _fightReplayData;
     private Dictionary<int, ReplayCheckpoint> _fightCheckpoints = new();
@@ -168,6 +172,7 @@ public partial class ReplayRunner : Node2D
 
         string battlePath = config.BattleLogPath;
         if (!File.Exists(battlePath)) { ShowError($"Battle log not found:\n{battlePath}"); return; }
+        _battleLogPath = battlePath;
 
         string battleJson = File.ReadAllText(battlePath);
 
@@ -196,7 +201,8 @@ public partial class ReplayRunner : Node2D
         foreach (var cp in _fightReplayData.Checkpoints)
             _fightCheckpoints[cp.T] = cp;
 
-        GD.Print($"=== REPLAY (Fight): {battleLog!.Fighter} vs {battleLog.Opponent} ===");
+        _matchName = $"{battleLog!.Fighter} vs {battleLog.Opponent}";
+        GD.Print($"=== REPLAY (Fight): {_matchName} ===");
         GD.Print($"  Seed: {_fightReplayData.MatchSeed?.ToString() ?? "NONE"}");
         StartReplay();
     }
@@ -211,7 +217,8 @@ public partial class ReplayRunner : Node2D
         foreach (var cp in _beaconReplayData.Checkpoints)
             _beaconCheckpoints[cp.T] = cp;
 
-        GD.Print($"=== REPLAY (Beacon Brawl): {battleLog!.Team} vs {battleLog.Opponent} ===");
+        _matchName = $"{battleLog!.Team} vs {battleLog.Opponent}";
+        GD.Print($"=== REPLAY (Beacon Brawl): {_matchName} ===");
         GD.Print($"  Seed: {_beaconReplayData.MatchSeed?.ToString() ?? "NONE"}");
         StartReplay();
     }
@@ -338,7 +345,7 @@ public partial class ReplayRunner : Node2D
     private void PreSimulateBeacon()
     {
         var rd = _beaconReplayData!;
-        var arena = new BeaconArena(rd.Arena.Width, rd.Arena.Height);
+        var arena = new BeaconArena(rd.Arena.Width, rd.Arena.Height, modifiers: rd.Arena.Modifiers);
         var firstCp = rd.Checkpoints[0];
         var rolesA = firstCp.P.Where(p => p.T == 0).Select(p => (PawnRole)p.R).ToArray();
         var rolesB = firstCp.P.Where(p => p.T == 1).Select(p => (PawnRole)p.R).ToArray();
@@ -454,6 +461,28 @@ public partial class ReplayRunner : Node2D
 
         var canvasLayer = new CanvasLayer();
         AddChild(canvasLayer);
+
+        // Arena config label (top-left)
+        var configLabel = new Label { Position = new Vector2(20, 10) };
+        configLabel.AddThemeColorOverride("font_color", new Color(0.5f, 0.7f, 0.5f, 0.7f));
+        configLabel.AddThemeFontSizeOverride("font_size", 12);
+        var cfg = arena.Config;
+        if (cfg.HasModifiers)
+        {
+            var parts = new List<string>();
+            if (cfg.Platforms.Count > 0) parts.Add($"Platforms:{cfg.Platforms.Count}");
+            if (cfg.HazardZones.Count > 0) parts.Add($"Hazards:{cfg.HazardZones.Count}");
+            if (cfg.DestructibleWalls.Count > 0) parts.Add($"Walls:{cfg.DestructibleWalls.Count}");
+            if (cfg.Pickups.Count > 0) parts.Add($"Pickups:{cfg.Pickups.Count}");
+            if (cfg.Shrink != null) parts.Add("Shrink");
+            if (cfg.Ceiling != null) parts.Add("Ceiling");
+            if (cfg.CornerBumpers.Count > 0) parts.Add($"Bumpers:{cfg.CornerBumpers.Count}");
+            configLabel.Text = $"Modifiers: {string.Join(" | ", parts)}";
+        }
+        else
+            configLabel.Text = "Arena: Flat";
+        canvasLayer.AddChild(configLabel);
+
         AddControlBar(canvasLayer);
         _hasMatch = true;
     }
@@ -461,7 +490,7 @@ public partial class ReplayRunner : Node2D
     private void BuildBeaconScene()
     {
         var rd = _beaconReplayData!;
-        var arena = new BeaconArena(rd.Arena.Width, rd.Arena.Height);
+        var arena = new BeaconArena(rd.Arena.Width, rd.Arena.Height, modifiers: rd.Arena.Modifiers);
 
         // Create live pawn objects for renderers
         var firstCp = rd.Checkpoints[0];
@@ -868,8 +897,156 @@ public partial class ReplayRunner : Node2D
                     _displayTick = 0; ApplySnapshot(0); break;
                 case Key.Escape:
                     GetTree().Quit(); break;
+                case Key.F12 when _hasMatch:
+                    TakeScreenshot(); break;
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Screenshot (F12) — saves PNG + JSON with game state
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private void TakeScreenshot()
+    {
+        var dir = ProjectSettings.GlobalizePath("res://debug/screenshots");
+        if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+        string ts = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+        string pngPath = Path.Combine(dir, $"{ts}.png");
+        string jsonPath = Path.Combine(dir, $"{ts}.json");
+
+        // Capture viewport image
+        var img = GetViewport().GetTexture().GetImage();
+        img.SavePng(pngPath);
+
+        // Build state JSON
+        var state = BuildScreenshotState(ts);
+        string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
+        File.WriteAllText(jsonPath, json);
+
+        GD.Print($"Screenshot saved: {pngPath}");
+    }
+
+    private object BuildScreenshotState(string timestamp)
+    {
+        var snap = _displayTick >= 0 && _displayTick < _timeline.Count ? _timeline[_displayTick] : default;
+
+        // Run config — pull modifier info from live match objects
+        object? runConfig = null;
+        if (_isBeaconBrawl && _beaconReplayData != null)
+        {
+            var rd = _beaconReplayData;
+            var mods = _beaconMatchRef?.Arena.Modifiers;
+            var modList = new List<string>();
+            if (mods != null && mods.HasModifiers)
+            {
+                if (mods.Platforms.Count > 0) modList.Add($"platforms:{mods.Platforms.Count}");
+                if (mods.HazardZones.Count > 0) modList.Add($"hazards:{mods.HazardZones.Count}");
+                if (mods.DestructibleWalls.Count > 0) modList.Add($"walls:{mods.DestructibleWalls.Count}");
+                if (mods.Pickups.Count > 0) modList.Add($"pickups:{mods.Pickups.Count}");
+                if (mods.Shrink != null) modList.Add("shrink");
+                if (mods.Ceiling != null) modList.Add("ceiling");
+                if (mods.CornerBumpers.Count > 0) modList.Add($"bumpers:{mods.CornerBumpers.Count}");
+                if (mods.WallFrictionZones.Count > 0) modList.Add($"friction:{mods.WallFrictionZones.Count}");
+            }
+            runConfig = new
+            {
+                mode = "beacon_brawl",
+                arena_width = rd.Arena.Width,
+                arena_height = rd.Arena.Height,
+                team_size = rd.TeamSize,
+                match_seed = rd.MatchSeed,
+                beacon_count = rd.Arena.BeaconCenters?.Length ?? 3,
+                map = modList.Count > 0 ? string.Join(", ", modList) : "flat (no modifiers)"
+            };
+        }
+        else if (_fightReplayData != null)
+        {
+            var rd = _fightReplayData;
+            var cfg = rd.Arena.Config;
+            var modList = new List<string>();
+            if (cfg != null && cfg.HasModifiers)
+            {
+                if (cfg.Platforms.Count > 0) modList.Add($"platforms:{cfg.Platforms.Count}");
+                if (cfg.HazardZones.Count > 0) modList.Add($"hazards:{cfg.HazardZones.Count}");
+                if (cfg.DestructibleWalls.Count > 0) modList.Add($"walls:{cfg.DestructibleWalls.Count}");
+                if (cfg.Pickups.Count > 0) modList.Add($"pickups:{cfg.Pickups.Count}");
+                if (cfg.Shrink != null) modList.Add("shrink");
+                if (cfg.Ceiling != null) modList.Add("ceiling");
+                if (cfg.CornerBumpers.Count > 0) modList.Add($"bumpers:{cfg.CornerBumpers.Count}");
+                if (cfg.WallFrictionZones.Count > 0) modList.Add($"friction:{cfg.WallFrictionZones.Count}");
+            }
+            runConfig = new
+            {
+                mode = "fight",
+                arena_width = rd.Arena.Width,
+                arena_height = rd.Arena.Height,
+                match_seed = rd.MatchSeed,
+                map = modList.Count > 0 ? string.Join(", ", modList) : "flat (no modifiers)"
+            };
+        }
+
+        // Current positions
+        object? positions = null;
+        if (!_isBeaconBrawl && snap.Fighters != null)
+        {
+            positions = new
+            {
+                fighter0 = new { x = snap.Fighters[0].X, y = snap.Fighters[0].Y, hp = snap.Fighters[0].Hp, grounded = snap.Fighters[0].Grounded },
+                fighter1 = new { x = snap.Fighters[1].X, y = snap.Fighters[1].Y, hp = snap.Fighters[1].Hp, grounded = snap.Fighters[1].Grounded }
+            };
+        }
+        else if (_isBeaconBrawl && snap.Pawns != null)
+        {
+            var pawnStates = new object[snap.Pawns.Length];
+            for (int i = 0; i < snap.Pawns.Length; i++)
+            {
+                var p = snap.Pawns[i];
+                pawnStates[i] = new
+                {
+                    index = i, team = i < snap.Pawns.Length / 2 ? 0 : 1,
+                    x = p.X, y = p.Y, hp = p.Hp, dead = p.Dead, stunned = p.Stunned,
+                    vulnerable = p.Vulnerable, parry_active = p.ParryActive
+                };
+            }
+            positions = new { pawns = pawnStates, scores = snap.Scores, kills = snap.Kills };
+        }
+
+        // Feature state
+        object? featureState = null;
+        if (!_isBeaconBrawl && snap.WallHp != null)
+        {
+            featureState = new
+            {
+                wall_hp = snap.WallHp, wall_exists = snap.WallExists,
+                pickup_active = snap.PickupActive,
+                effective_left = snap.EffectiveLeft, effective_right = snap.EffectiveRight
+            };
+        }
+        else if (_isBeaconBrawl && snap.Beacons != null)
+        {
+            var beaconStates = new object[snap.Beacons.Length];
+            for (int i = 0; i < snap.Beacons.Length; i++)
+                beaconStates[i] = new { owner = snap.Beacons[i].Owner, capture_progress = snap.Beacons[i].CaptureProgress, contested = snap.Beacons[i].Contested };
+            featureState = new { beacons = beaconStates, rates = snap.Rates };
+        }
+
+        return new
+        {
+            timestamp,
+            match_name = _matchName,
+            replay_file = _battleLogPath,
+            tick = _displayTick,
+            total_ticks = _finalTick,
+            time_seconds = _displayTick / 60f,
+            is_beacon_brawl = _isBeaconBrawl,
+            run_config = runConfig,
+            positions,
+            feature_state = featureState,
+            is_over = snap.IsOver,
+            winner = snap.WinnerIdx
+        };
     }
 }
 

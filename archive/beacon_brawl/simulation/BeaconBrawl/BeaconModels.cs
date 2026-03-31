@@ -99,6 +99,8 @@ public record BeaconReplayArena
     public float[][] BeaconCenters { get; init; } = [];
     public int[] BeaconMultipliers { get; init; } = [];
     public float[][] BaseZoneCenters { get; init; } = [];
+    /// <summary>Arena modifiers active during the match (null = flat/no modifiers).</summary>
+    public AiBtGym.Simulation.ArenaConfig? Modifiers { get; init; }
 }
 
 public record BeaconReplayCheckpoint

@@ -195,7 +195,7 @@ public static class BeaconPhysics
 
     /// <summary>Tick all projectiles: move, check wall collision, check pawn collision.</summary>
     public static void TickProjectiles(List<Projectile> projectiles, Pawn[] allPawns, BeaconArena arena,
-        BeaconRecorder? recorder = null, int tick = 0)
+        BeaconMatch? match = null, BeaconRecorder? recorder = null, int tick = 0)
     {
         for (int i = projectiles.Count - 1; i >= 0; i--)
         {
@@ -214,12 +214,45 @@ public static class BeaconPhysics
                 continue;
             }
 
-            // Check platform collision
+            // Check center platform collision
             if (arena.Platform.HasPoint(proj.Position))
             {
                 proj.IsAlive = false;
                 projectiles.RemoveAt(i);
                 continue;
+            }
+
+            // Check modifier platform collision
+            bool hitModPlat = false;
+            foreach (var plat in arena.Modifiers.Platforms)
+            {
+                float pL = plat.X - plat.Width / 2f, pR = plat.X + plat.Width / 2f;
+                if (proj.Position.X >= pL && proj.Position.X <= pR &&
+                    proj.Position.Y >= plat.Y && proj.Position.Y <= plat.Y + plat.Height)
+                { hitModPlat = true; break; }
+            }
+            if (hitModPlat) { proj.IsAlive = false; projectiles.RemoveAt(i); continue; }
+
+            // Check modifier destructible wall collision
+            if (match != null)
+            {
+                bool hitWall = false;
+                var walls = arena.Modifiers.DestructibleWalls;
+                for (int wi = 0; wi < walls.Count; wi++)
+                {
+                    if (!match.DestructibleWallExists[wi]) continue;
+                    var w = walls[wi];
+                    float wL = w.X - w.Thickness / 2f, wR = w.X + w.Thickness / 2f;
+                    float wT = w.BottomY - w.Height;
+                    if (proj.Position.X >= wL && proj.Position.X <= wR &&
+                        proj.Position.Y >= wT && proj.Position.Y <= w.BottomY)
+                    {
+                        match.DestructibleWallHp[wi] -= proj.Damage;
+                        if (match.DestructibleWallHp[wi] <= 0) { match.DestructibleWallHp[wi] = 0; match.DestructibleWallExists[wi] = false; }
+                        hitWall = true; break;
+                    }
+                }
+                if (hitWall) { proj.IsAlive = false; projectiles.RemoveAt(i); continue; }
             }
 
             // Check pawn collision
@@ -270,7 +303,7 @@ public static class BeaconPhysics
 
     /// <summary>Fire a rifle ray with up to maxBounces ricochets. Returns hit pawn or null.</summary>
     public static Pawn? FireRifle(Pawn shooter, Vector2 aimDir, Pawn[] allPawns, BeaconArena arena,
-        out List<Vector2> raySegments)
+        bool[]? destructibleWallExists, out List<Vector2> raySegments)
     {
         raySegments = [];
 
@@ -300,9 +333,12 @@ public static class BeaconPhysics
                 }
             }
 
-            // Check wall hit
-            bool wallHit = arena.RaycastWall(origin, dir, remaining,
-                out Vector2 wallPoint, out Vector2 wallNormal, out float wallDist);
+            // Check wall hit (includes modifier surfaces)
+            bool wallHit = destructibleWallExists != null
+                ? arena.RaycastWallWithDestructibles(origin, dir, remaining, destructibleWallExists,
+                    out Vector2 wallPoint, out Vector2 wallNormal, out float wallDist)
+                : arena.RaycastWall(origin, dir, remaining,
+                    out wallPoint, out wallNormal, out wallDist);
 
             // Pawn hit is closer than wall
             if (hitPawn != null && hitPawnDist < wallDist)

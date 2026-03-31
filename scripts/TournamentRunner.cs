@@ -33,7 +33,9 @@ public partial class TournamentRunner : Node
     private readonly Dictionary<string, GenerationSummary> _lastSummaries = new();
     private List<TestResult>? _lastTestResults;
     private List<MapTests.MapTestResult>? _lastMapTestResults;
+    private List<BeaconMapTests.BeaconMapTestResult>? _lastBbMapTestResults;
     private string _mapTestDir = "";
+    private string _bbMapTestDir = "";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -46,6 +48,7 @@ public partial class TournamentRunner : Node
         _projectDir = ProjectSettings.GlobalizePath("res://");
         _outputPath = Path.Combine(_projectDir, "generations");
         _mapTestDir = Path.Combine(_projectDir, "map_test_replays");
+        _bbMapTestDir = Path.Combine(_projectDir, "bb_map_test_replays");
 
         var port = System.Environment.GetEnvironmentVariable("PORT") ?? "8585";
         _listener = new HttpListener();
@@ -117,6 +120,14 @@ public partial class TournamentRunner : Node
                 await ServeTestPage(res);
             else if (path == "/bt-compare" && method == "GET")
                 await ServeBtCompare(res);
+            else if (path == "/screenshots" && method == "GET")
+                await ServeScreenshotsPage(res);
+            else if (path == "/api/screenshots" && method == "GET")
+                await ServeScreenshotsList(res);
+            else if (path.StartsWith("/api/screenshots/img/") && method == "GET")
+                await ServeScreenshotImage(res, path);
+            else if (path == "/api/screenshots/clear" && method == "POST")
+                await ClearScreenshots(res);
             else if (path == "/api/replay/launch" && method == "POST")
                 await LaunchReplay(req, res);
             else if (path == "/api/tests/run" && method == "POST")
@@ -125,6 +136,10 @@ public partial class TournamentRunner : Node
                 await ServeJson(res, _lastTestResults ?? new List<TestResult>());
             else if (path == "/api/tests/map-results" && method == "GET")
                 await ServeMapTestResults(res);
+            else if (path == "/api/tests/bb-map-results" && method == "GET")
+                await ServeBbMapTestResults(res);
+            else if (path == "/api/tests/bb-map-launch" && method == "POST")
+                await LaunchBbMapTestReplay(req, res);
             else if (path == "/api/tests/map-launch" && method == "POST")
                 await LaunchMapTestReplay(req, res);
 
@@ -583,16 +598,20 @@ public partial class TournamentRunner : Node
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         _lastTestResults = MovementTests.RunAll();
         _lastMapTestResults = MapTests.RunAll();
+        _lastBbMapTestResults = BeaconMapTests.RunAll();
         stopwatch.Stop();
 
         int passed = _lastTestResults.Count(r => r.Passed);
         int failed = _lastTestResults.Count(r => !r.Passed);
         int mapPassed = _lastMapTestResults.Count(r => r.Passed);
         int mapFailed = _lastMapTestResults.Count(r => !r.Passed);
-        GD.Print($"Tests: {passed} passed, {failed} failed; Map: {mapPassed} passed, {mapFailed} failed in {stopwatch.ElapsedMilliseconds}ms");
+        int bbPassed = _lastBbMapTestResults.Count(r => r.Passed);
+        int bbFailed = _lastBbMapTestResults.Count(r => !r.Passed);
+        GD.Print($"Tests: {passed}p/{failed}f; Map: {mapPassed}p/{mapFailed}f; BB: {bbPassed}p/{bbFailed}f in {stopwatch.ElapsedMilliseconds}ms");
 
-        // Save map test battle logs to disk for replay launching
+        // Save battle logs to disk for replay launching
         SaveMapTestBattleLogs();
+        SaveBbMapTestBattleLogs();
 
         // Slim map results for the response (no full BattleLog — it's huge)
         var slimMapResults = _lastMapTestResults.Select(r => new
@@ -604,11 +623,21 @@ public partial class TournamentRunner : Node
             has_replay = r.BattleLog?.Replay != null
         });
 
+        var slimBbResults = _lastBbMapTestResults.Select(r => new
+        {
+            map_name = r.MapName, passed = r.Passed, error = r.Error,
+            duration_ticks = r.DurationTicks,
+            final_scores = r.FinalScores, kills = r.Kills,
+            winner_team = r.WinnerTeam, feature_notes = r.FeatureNotes,
+            has_replay = r.BattleLog?.Replay != null
+        });
+
         await ServeJson(res, new
         {
             elapsed_ms = stopwatch.ElapsedMilliseconds,
             passed, failed, results = _lastTestResults,
-            map_passed = mapPassed, map_failed = mapFailed, map_results = slimMapResults
+            map_passed = mapPassed, map_failed = mapFailed, map_results = slimMapResults,
+            bb_passed = bbPassed, bb_failed = bbFailed, bb_results = slimBbResults
         });
     }
 
@@ -702,6 +731,110 @@ public partial class TournamentRunner : Node
             res.StatusCode = 500;
             await ServeJson(res, new { error = $"Failed to launch Godot: {ex.Message}" });
         }
+    }
+
+    private void SaveBbMapTestBattleLogs()
+    {
+        if (_lastBbMapTestResults == null) return;
+        Directory.CreateDirectory(_bbMapTestDir);
+        foreach (var f in Directory.GetFiles(_bbMapTestDir, "*.json")) File.Delete(f);
+        foreach (var r in _lastBbMapTestResults)
+        {
+            if (r.BattleLog == null) continue;
+            var path = Path.Combine(_bbMapTestDir, $"{r.MapName}.json");
+            File.WriteAllText(path, JsonSerializer.Serialize(r.BattleLog, TournamentJson.Options));
+        }
+    }
+
+    private async System.Threading.Tasks.Task ServeBbMapTestResults(HttpListenerResponse res)
+    {
+        if (_lastBbMapTestResults == null) { await ServeJson(res, Array.Empty<object>()); return; }
+        var slim = _lastBbMapTestResults.Select(r => new
+        {
+            map_name = r.MapName, passed = r.Passed, error = r.Error,
+            duration_ticks = r.DurationTicks, final_scores = r.FinalScores,
+            kills = r.Kills, winner_team = r.WinnerTeam,
+            feature_notes = r.FeatureNotes, has_replay = r.BattleLog?.Replay != null
+        });
+        await ServeJson(res, slim);
+    }
+
+    private async System.Threading.Tasks.Task LaunchBbMapTestReplay(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        string body;
+        using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
+            body = await reader.ReadToEndAsync();
+        var payload = JsonSerializer.Deserialize<JsonElement>(body);
+        var mapName = payload.TryGetProperty("map", out var m) ? m.GetString() ?? "" : "";
+        if (string.IsNullOrEmpty(mapName)) { res.StatusCode = 400; await ServeJson(res, new { error = "Missing map name" }); return; }
+
+        var battleLogPath = Path.Combine(_bbMapTestDir, $"{mapName}.json");
+        if (!File.Exists(battleLogPath)) { res.StatusCode = 404; await ServeJson(res, new { error = $"No battle log for '{mapName}'. Run tests first." }); return; }
+
+        var configPath = Path.Combine(_projectDir, "replay_config.json");
+        File.WriteAllText(configPath, JsonSerializer.Serialize(new { battle_log_path = battleLogPath }, TournamentJson.Options));
+
+        var godotPath = @"C:\Program Files\godot\godot.exe";
+        var args = $"--path \"{_projectDir}\" --scene res://scenes/replay.tscn";
+        GD.Print($"Launching BB map test replay ({mapName}): {godotPath} {args}");
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(godotPath, args) { UseShellExecute = false, WorkingDirectory = _projectDir });
+            await ServeJson(res, new { status = "launched", map = mapName });
+        }
+        catch (Exception ex) { res.StatusCode = 500; await ServeJson(res, new { error = $"Failed to launch: {ex.Message}" }); }
+    }
+
+    // ── Screenshots ──
+
+    private async System.Threading.Tasks.Task ServeScreenshotsPage(HttpListenerResponse res)
+    {
+        res.ContentType = "text/html; charset=utf-8";
+        await WriteBytes(res, Encoding.UTF8.GetBytes(BuildScreenshotsHtml()));
+    }
+
+    private async System.Threading.Tasks.Task ServeScreenshotsList(HttpListenerResponse res)
+    {
+        var ssDir = Path.Combine(_projectDir, "debug", "screenshots");
+        var items = new List<object>();
+        if (Directory.Exists(ssDir))
+        {
+            foreach (var jsonFile in Directory.GetFiles(ssDir, "*.json").OrderByDescending(f => f))
+            {
+                var name = Path.GetFileNameWithoutExtension(jsonFile);
+                var pngFile = Path.Combine(ssDir, name + ".png");
+                bool hasPng = File.Exists(pngFile);
+                string stateJson = File.ReadAllText(jsonFile);
+                items.Add(new { name, has_image = hasPng, state = JsonSerializer.Deserialize<JsonElement>(stateJson) });
+            }
+        }
+        await ServeJson(res, items);
+    }
+
+    private async System.Threading.Tasks.Task ServeScreenshotImage(HttpListenerResponse res, string path)
+    {
+        // path: /api/screenshots/img/{name}.png
+        var parts = path.Split('/');
+        var filename = parts[^1];
+        var filePath = Path.Combine(_projectDir, "debug", "screenshots", filename);
+        if (!File.Exists(filePath)) { res.StatusCode = 404; await WriteText(res, "Not found"); return; }
+        res.ContentType = "image/png";
+        var bytes = File.ReadAllBytes(filePath);
+        res.ContentLength64 = bytes.Length;
+        await res.OutputStream.WriteAsync(bytes);
+        res.Close();
+    }
+
+    private async System.Threading.Tasks.Task ClearScreenshots(HttpListenerResponse res)
+    {
+        var ssDir = Path.Combine(_projectDir, "debug", "screenshots");
+        int count = 0;
+        if (Directory.Exists(ssDir))
+        {
+            foreach (var f in Directory.GetFiles(ssDir)) { File.Delete(f); count++; }
+        }
+        GD.Print($"Cleared {count} screenshot files");
+        await ServeJson(res, new { cleared = count });
     }
 
     private async System.Threading.Tasks.Task ServeTestPage(HttpListenerResponse res)
@@ -1377,7 +1510,7 @@ loadTournaments().then(() => restoreFromHash());
 </style>
 </head>
 <body>
-<div class="nav"><a href="/">Tournaments</a> | <strong>Tests</strong></div>
+<div class="nav"><a href="/">Tournaments</a> | <strong>Tests</strong> | <a href="/screenshots">Screenshots</a></div>
 <div class="header">
   <div><h1>Tests</h1><p class="subtitle">Movement tests with visual replay + Map self-play tests with Godot replay</p></div>
   <div style="display:flex;align-items:center"><button id="runBtn" onclick="runTests()">Run All Tests</button><span id="statusText" class="status"></span></div>
@@ -1386,10 +1519,13 @@ loadTournaments().then(() => restoreFromHash());
 <div id="results"></div>
 <h2 style="color:var(--accent);margin:16px 0 8px">Map Self-Play Tests</h2>
 <div id="mapResults"></div>
+<h2 style="color:var(--accent);margin:16px 0 8px">Beacon Brawl Map Tests (TestTeam Self-Play)</h2>
+<div id="bbResults"></div>
 
 <script>
 let testData = null;
 let mapTestData = null;
+let bbTestData = null;
 let activeReplay = null; // {idx, playing, speed, currentTick, maxTick, lastFrameTime, canvas, ctx}
 
 async function runTests() {
@@ -1402,20 +1538,23 @@ async function runTests() {
     const data = await r.json();
     testData = { passed: data.passed, failed: data.failed, results: data.results };
     mapTestData = data.map_results || [];
-    const totalP = data.passed + (data.map_passed || 0);
-    const totalF = data.failed + (data.map_failed || 0);
+    bbTestData = data.bb_results || [];
+    const totalP = data.passed + (data.map_passed || 0) + (data.bb_passed || 0);
+    const totalF = data.failed + (data.map_failed || 0) + (data.bb_failed || 0);
     status.textContent = `${totalP} passed, ${totalF} failed in ${data.elapsed_ms}ms`;
     renderResults();
     renderMapResults();
+    renderBbResults();
   } catch(e) { status.textContent = 'Error: ' + e.message; }
   btn.disabled = false;
 }
 
 async function loadCached() {
   try {
-    const [movR, mapR] = await Promise.all([
+    const [movR, mapR, bbR] = await Promise.all([
       fetch('/api/tests/results'),
-      fetch('/api/tests/map-results')
+      fetch('/api/tests/map-results'),
+      fetch('/api/tests/bb-map-results')
     ]);
     const results = await movR.json();
     if (results.length > 0) {
@@ -1425,13 +1564,12 @@ async function loadCached() {
       renderResults();
     }
     const mapResults = await mapR.json();
-    if (mapResults.length > 0) {
-      mapTestData = mapResults;
-      renderMapResults();
-    }
+    if (mapResults.length > 0) { mapTestData = mapResults; renderMapResults(); }
+    const bbResults = await bbR.json();
+    if (bbResults.length > 0) { bbTestData = bbResults; renderBbResults(); }
     // Update combined status
-    const tp = (testData?.passed || 0) + (mapTestData ? mapTestData.filter(r => r.passed).length : 0);
-    const tf = (testData?.failed || 0) + (mapTestData ? mapTestData.filter(r => !r.passed).length : 0);
+    const tp = (testData?.passed || 0) + (mapTestData ? mapTestData.filter(r => r.passed).length : 0) + (bbTestData ? bbTestData.filter(r => r.passed).length : 0);
+    const tf = (testData?.failed || 0) + (mapTestData ? mapTestData.filter(r => !r.passed).length : 0) + (bbTestData ? bbTestData.filter(r => !r.passed).length : 0);
     if (tp + tf > 0) document.getElementById('statusText').textContent = `${tp} passed, ${tf} failed (cached)`;
   } catch(e) {}
 }
@@ -1465,6 +1603,46 @@ function renderMapResults() {
 async function launchMapReplay(mapName) {
   try {
     const r = await fetch('/api/tests/map-launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ map: mapName })
+    });
+    const data = await r.json();
+    if (data.error) alert('Launch failed: ' + data.error);
+  } catch(e) { alert('Launch error: ' + e.message); }
+}
+
+function renderBbResults() {
+  if (!bbTestData) return;
+  const el = document.getElementById('bbResults');
+  el.innerHTML = bbTestData.map(t => {
+    const outcome = t.feature_notes?.outcome || '';
+    const duration = t.feature_notes?.duration || `${t.duration_ticks} ticks`;
+    const scores = t.final_scores ? `${t.final_scores[0]}-${t.final_scores[1]}` : '';
+    const kills = t.kills ? `kills: ${t.kills[0]}-${t.kills[1]}` : '';
+    const notes = Object.entries(t.feature_notes || {})
+      .filter(([k]) => k !== 'outcome' && k !== 'duration' && k !== 'scores' && k !== 'kills')
+      .map(([k, v]) => `<span class="metric"><span>${k}:</span> ${v}</span>`)
+      .join(' ');
+    return `
+    <div class="card" style="cursor:default">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2>${t.map_name}</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${t.has_replay ? `<button onclick="event.stopPropagation(); launchBbReplay('${t.map_name}')" style="background:#3fb950;padding:6px 14px;font-size:12px">Watch in Godot</button>` : ''}
+          <span class="badge ${t.passed ? 'badge-pass' : 'badge-fail'}">${t.passed ? 'PASS' : 'FAIL'}</span>
+        </div>
+      </div>
+      ${t.error ? `<div class="error-msg">${t.error}</div>` : ''}
+      <div style="color:var(--dim);font-size:13px;margin-top:4px">${outcome} &mdash; ${duration} &mdash; ${scores} ${kills}</div>
+      <div style="margin-top:6px;line-height:1.8">${notes}</div>
+    </div>`;
+  }).join('');
+}
+
+async function launchBbReplay(mapName) {
+  try {
+    const r = await fetch('/api/tests/bb-map-launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ map: mapName })
@@ -2858,4 +3036,200 @@ loadTournaments().then(() => loadGenerations());
             res.Close();
         }
     }
+
+    private static string BuildScreenshotsHtml() => """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Screenshots — AI-BT-Gym</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); padding: 20px; }
+  h1 { color: var(--accent); margin-bottom: 4px; }
+  .subtitle { color: var(--dim); margin-bottom: 16px; }
+  .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .nav { margin-bottom: 12px; font-size: 13px; }
+  .nav a { color: var(--accent); text-decoration: none; } .nav a:hover { text-decoration: underline; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; cursor: pointer; transition: border-color 0.2s; }
+  .card:hover { border-color: var(--accent); }
+  .card.selected { border-color: var(--green); border-width: 2px; }
+  .card-thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; object-position: bottom left; display: block; }
+  .card-info { padding: 8px 12px; font-size: 12px; }
+  .card-info .ts { color: var(--accent); font-weight: 600; }
+  .card-info .mode { color: var(--dim); }
+  .card-info .match-name { color: var(--text); font-weight: 600; font-size: 13px; }
+  .detail { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; display: none; }
+  .detail.active { display: block; }
+  .detail-header { margin-bottom: 12px; }
+  .detail-header h2 { color: var(--text); font-size: 16px; margin-bottom: 2px; }
+  .detail-header .replay-path { font-family: 'Consolas', monospace; font-size: 11px; color: var(--dim); cursor: pointer; }
+  .detail-header .replay-path:hover { color: var(--accent); }
+  .detail-body { display: flex; gap: 16px; }
+  .detail-img { flex: 0 0 auto; max-width: 55%; }
+  .detail-img img { width: 100%; border-radius: 4px; border: 1px solid var(--border); }
+  .detail-state { flex: 1; font-size: 13px; overflow-y: auto; max-height: 600px; }
+  .detail-state h3 { color: var(--accent); margin: 8px 0 4px; font-size: 14px; }
+  .kv { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--border); }
+  .kv .k { color: var(--dim); min-width: 120px; }
+  .kv .v { color: var(--text); }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 700; }
+  .badge-bb { background: rgba(86,39,173,0.2); color: #a855f7; }
+  .badge-fight { background: rgba(248,81,73,0.2); color: var(--red); }
+  .empty { color: var(--dim); text-align: center; padding: 60px; }
+  .clear-btn { background: var(--card); border: 1px solid var(--border); color: var(--red); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .clear-btn:hover { border-color: var(--red); }
+</style>
+</head>
+<body>
+<div class="nav"><a href="/">Tournaments</a> | <a href="/tests">Tests</a> | <strong>Screenshots</strong></div>
+<div class="header-row">
+  <div><h1>Screenshots</h1><p class="subtitle">Press F12 in replay viewer to capture screenshots with game state</p></div>
+  <button class="clear-btn" onclick="clearAll()">Clear All Screenshots</button>
+</div>
+
+<div id="detail" class="detail"></div>
+<div id="grid" class="grid"></div>
+
+<script>
+let screenshots = [];
+let selectedIdx = -1;
+
+async function load() {
+  try {
+    const r = await fetch('/api/screenshots');
+    screenshots = await r.json();
+    renderGrid();
+  } catch(e) {
+    document.getElementById('grid').innerHTML = `<div class="empty">No screenshots yet. Open a replay and press F12.</div>`;
+  }
+}
+
+async function clearAll() {
+  if (!confirm('Delete all screenshots?')) return;
+  await fetch('/api/screenshots/clear', { method: 'POST' });
+  screenshots = [];
+  selectedIdx = -1;
+  document.getElementById('detail').classList.remove('active');
+  document.getElementById('detail').innerHTML = '';
+  renderGrid();
+}
+
+function renderGrid() {
+  const el = document.getElementById('grid');
+  if (screenshots.length === 0) {
+    el.innerHTML = '<div class="empty">No screenshots yet. Open a replay and press F12.</div>';
+    return;
+  }
+  el.innerHTML = screenshots.map((s, i) => {
+    const st = s.state;
+    const mode = st.is_beacon_brawl ? 'BB' : 'Fight';
+    const modeBadge = st.is_beacon_brawl ? 'badge-bb' : 'badge-fight';
+    const tick = `${st.tick}/${st.total_ticks}`;
+    const mapVal = st.run_config?.map || 'flat';
+    const isFlat = mapVal.includes('flat') || mapVal.includes('no modifier');
+    const matchName = st.match_name || '';
+    return `
+    <div class="card" id="card-${i}" onclick="selectScreenshot(${i})">
+      ${s.has_image ? `<img class="card-thumb" src="/api/screenshots/img/${s.name}.png" loading="lazy">` : '<div style="height:180px;background:#0a0e14;display:flex;align-items:center;justify-content:center;color:var(--dim)">No image</div>'}
+      <div class="card-info">
+        ${matchName ? `<div class="match-name">${matchName}</div>` : ''}
+        <span class="badge ${modeBadge}">${mode}</span>
+        <span class="mode">Tick ${tick} (${st.time_seconds?.toFixed(1) || '?'}s)</span>
+        <br><span style="color:${isFlat ? 'var(--dim)' : '#3fb950'};font-size:11px">${mapVal}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectScreenshot(idx) {
+  if (selectedIdx >= 0) document.getElementById('card-' + selectedIdx)?.classList.remove('selected');
+  selectedIdx = idx;
+  document.getElementById('card-' + idx)?.classList.add('selected');
+
+  const s = screenshots[idx];
+  const st = s.state;
+  const detail = document.getElementById('detail');
+  detail.classList.add('active');
+
+  // Header: match name + replay path
+  const matchName = st.match_name || s.name;
+  const replayFile = st.replay_file || '';
+  const shortPath = replayFile.replace(/\\/g, '/').split('/').slice(-4).join('/');
+
+  let stateHtml = '';
+
+  // Run config
+  if (st.run_config) {
+    stateHtml += '<h3>Run Config</h3>';
+    const rc = st.run_config;
+    const mapVal = rc.map || 'flat (no modifiers)';
+    const isFlat = mapVal.includes('flat') || mapVal.includes('no modifier');
+    stateHtml += `<div class="kv"><span class="k" style="font-weight:700">Map</span><span class="v" style="color:${isFlat ? 'var(--dim)' : '#3fb950'};font-weight:600">${mapVal}</span></div>`;
+    for (const [k, v] of Object.entries(rc)) {
+      if (k === 'map') continue;
+      stateHtml += `<div class="kv"><span class="k">${k}</span><span class="v">${typeof v === 'object' ? JSON.stringify(v) : String(v)}</span></div>`;
+    }
+  }
+
+  // Positions
+  if (st.positions) {
+    stateHtml += '<h3>Positions</h3>';
+    if (st.positions.pawns) {
+      stateHtml += st.positions.pawns.map(p =>
+        `<div class="kv"><span class="k">Pawn ${p.index} (T${p.team})</span><span class="v">x:${p.x?.toFixed(0)} y:${p.y?.toFixed(0)} hp:${p.hp?.toFixed(0)} ${p.dead?'DEAD ':''}${p.stunned?'STUN ':''}${p.vulnerable?'VULN ':''}</span></div>`
+      ).join('');
+      if (st.positions.scores) stateHtml += `<div class="kv"><span class="k">Scores</span><span class="v">${st.positions.scores.join(' - ')}</span></div>`;
+      if (st.positions.kills) stateHtml += `<div class="kv"><span class="k">Kills</span><span class="v">${st.positions.kills.join(' - ')}</span></div>`;
+    } else {
+      stateHtml += renderKV(st.positions);
+    }
+  }
+
+  // Feature state
+  if (st.feature_state) {
+    stateHtml += '<h3>Feature State</h3>';
+    if (st.feature_state.beacons) {
+      const bNames = ['Left', 'Center', 'Right'];
+      stateHtml += st.feature_state.beacons.map((b, i) =>
+        `<div class="kv"><span class="k">Beacon ${bNames[i] || i}</span><span class="v">Owner:${b.owner===1?'A':b.owner===2?'B':'-'} Cap:${b.capture_progress} ${b.contested?'CONTESTED':''}</span></div>`
+      ).join('');
+    } else {
+      stateHtml += renderKV(st.feature_state);
+    }
+  }
+
+  // Meta
+  stateHtml += '<h3>Meta</h3>';
+  stateHtml += `<div class="kv"><span class="k">Tick</span><span class="v">${st.tick} / ${st.total_ticks} (${st.time_seconds?.toFixed(1)}s)</span></div>`;
+  stateHtml += `<div class="kv"><span class="k">Over</span><span class="v">${st.is_over ? 'Yes — Winner: ' + st.winner : 'No'}</span></div>`;
+
+  detail.innerHTML = `
+    <div class="detail-header">
+      <h2>${matchName}</h2>
+      ${replayFile ? `<span class="replay-path" title="${replayFile}" onclick="navigator.clipboard.writeText('${replayFile.replace(/\\/g, '\\\\\\\\')}'); this.textContent='copied!'; setTimeout(() => this.textContent='${shortPath}', 1200)">${shortPath}</span>` : ''}
+    </div>
+    <div class="detail-body">
+      ${s.has_image ? `<div class="detail-img"><img src="/api/screenshots/img/${s.name}.png"></div>` : ''}
+      <div class="detail-state">${stateHtml}</div>
+    </div>
+  `;
+}
+
+function renderKV(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  return Object.entries(obj).map(([k, v]) => {
+    const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return `<div class="kv"><span class="k">${k}</span><span class="v">${val}</span></div>`;
+  }).join('');
+}
+
+load();
+</script>
+</body>
+</html>
+""";
 }
