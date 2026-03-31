@@ -26,7 +26,7 @@ public class Fighter
 
     public void ApplyDamage(float amount)
     {
-        Health = Mathf.Max(0, Health - amount);
+        Health = Mathf.Clamp(Health - amount, 0f, 100f);
     }
 
     public Fist GetFist(string hand) =>

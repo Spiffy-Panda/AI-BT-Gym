@@ -37,7 +37,8 @@ public static class Tournament
     /// </summary>
     public static GenerationSummary RunGeneration(
         List<TournamentEntry> entries, int generation, string outputPath,
-        int bestOf = 7, int? masterSeed = null)
+        int bestOf = 7, int? masterSeed = null,
+        ArenaConfig? arenaConfig = null)
     {
         // Generate a master seed if not provided, and derive per-match seeds from it
         int seed = masterSeed ?? Environment.TickCount;
@@ -112,7 +113,7 @@ public static class Tournament
                     string matchId = $"gen_{generation:D3}_match_{matchNum:D3}_g{game + 1}";
 
                     // Create and run match with randomized starting positions
-                    var arena = new Arena();
+                    var arena = new Arena(arenaConfig);
                     var match = new Match(arena, entries[i].Roots, entries[j].Roots, seed: matchSeed);
                     var recorder = new MatchRecorder(
                         [entries[i].Name, entries[j].Name],

@@ -41,8 +41,13 @@ public partial class MovementTests : Node
         GD.Print($"  Results: {passed} passed, {failed} failed");
         if (failures.Count > 0) { GD.Print("  Failures:"); foreach (var f in failures) GD.Print($"    - {f}"); }
         GD.Print("═══════════════════════════════════════");
+        GD.Print();
 
-        GetTree().Quit(failed > 0 ? 1 : 0);
+        // Run map self-play tests
+        var mapResults = MapTests.RunAll();
+        int mapFailed = MapTests.PrintResults(mapResults);
+
+        GetTree().Quit((failed + mapFailed) > 0 ? 1 : 0);
     }
 
     // ── Public API ──

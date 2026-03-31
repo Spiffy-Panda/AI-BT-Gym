@@ -97,6 +97,37 @@ public static class Var
     public static readonly VarRef OpponentDirX = new("opponent_dir_x");
     public static readonly VarRef OpponentDirY = new("opponent_dir_y");
 
+    // ── Map awareness: static geometry ──
+    public static readonly VarRef ArenaWidth = new("arena_width");
+    public static readonly VarRef ArenaHeight = new("arena_height");
+    public static readonly VarRef PlatformCount = new("platform_count");
+    public static readonly VarRef HazardCount = new("hazard_count");
+    public static readonly VarRef HasShrink = new("has_shrink");
+    public static readonly VarRef HasCeiling = new("has_ceiling");
+    public static readonly VarRef HasBumpers = new("has_bumpers");
+    public static readonly VarRef HasFriction = new("has_friction");
+    public static readonly VarRef WallCount = new("wall_count");
+    public static readonly VarRef PickupCount = new("pickup_count");
+
+    // ── Map awareness: dynamic state ──
+    public static readonly VarRef OnPlatform = new("on_platform");
+    public static readonly VarRef OnHazard = new("on_hazard");
+    public static readonly VarRef InFrictionZone = new("in_friction_zone");
+    public static readonly VarRef NearestPlatformDist = new("nearest_platform_dist");
+    public static readonly VarRef ArenaLeft = new("arena_left");
+    public static readonly VarRef ArenaRight = new("arena_right");
+
+    // Indexed map variables — use VarRef("pickup_0_active") etc. for specific indices
+    public static VarRef PickupActive(int i) => new($"pickup_{i}_active");
+    public static VarRef PickupX(int i) => new($"pickup_{i}_x");
+    public static VarRef PickupY(int i) => new($"pickup_{i}_y");
+    public static VarRef PickupDist(int i) => new($"pickup_{i}_dist");
+    public static VarRef WallHp(int i) => new($"wall_{i}_hp");
+    public static VarRef WallExists(int i) => new($"wall_{i}_exists");
+    public static VarRef PlatformX(int i) => new($"platform_{i}_x");
+    public static VarRef PlatformY(int i) => new($"platform_{i}_y");
+    public static VarRef PlatformW(int i) => new($"platform_{i}_w");
+
     // Literals
     public static readonly ISpec Always = new LiteralSpec("always");
     public static readonly ISpec Never = new LiteralSpec("never");
@@ -149,4 +180,21 @@ public static class When
     // ── Chain extension ──
     public static ISpec LeftChainOver(float len) => Var.LeftChain.Gt(len);
     public static ISpec RightChainOver(float len) => Var.RightChain.Gt(len);
+
+    // ── Map awareness ──
+    public static readonly ISpec HasPlatforms = Var.PlatformCount.Gt(0);
+    public static readonly ISpec HasHazards = Var.HazardCount.Gt(0);
+    public static readonly ISpec HasPickups = Var.PickupCount.Gt(0);
+    public static readonly ISpec HasWalls = Var.WallCount.Gt(0);
+    public static readonly ISpec ArenaShrinking = Var.HasShrink.Eq(1);
+    public static readonly ISpec HasDippedCeiling = Var.HasCeiling.Eq(1);
+    public static readonly ISpec HasCornerBumpers = Var.HasBumpers.Eq(1);
+    public static readonly ISpec HasStickyWalls = Var.HasFriction.Eq(1);
+    public static readonly ISpec StandingOnPlatform = Var.OnPlatform.Eq(1);
+    public static readonly ISpec StandingOnHazard = Var.OnHazard.Eq(1);
+    public static readonly ISpec InWallFriction = Var.InFrictionZone.Eq(1);
+    public static ISpec PlatformNearby(float dist) => Var.NearestPlatformDist.Lt(dist);
+    public static ISpec PickupAvailable(int i = 0) => Var.PickupActive(i).Eq(1);
+    public static ISpec PickupClose(int i, float dist) => Var.PickupDist(i).Lt(dist);
+    public static ISpec WallStillStanding(int i = 0) => Var.WallExists(i).Eq(1);
 }

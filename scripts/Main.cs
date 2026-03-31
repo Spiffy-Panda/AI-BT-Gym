@@ -37,7 +37,7 @@ public partial class Main : Node2D
         _match = new Match(arena, bt0, bt1);
 
         // Arena renderer
-        _arenaRenderer = new ArenaRenderer { Arena = arena };
+        _arenaRenderer = new ArenaRenderer { Arena = arena, Match = _match };
         AddChild(_arenaRenderer);
 
         // Fighter renderers
@@ -100,6 +100,7 @@ public partial class Main : Node2D
         _renderer0!.Fighter = _match.Fighter0;
         _renderer1!.Fighter = _match.Fighter1;
         _arenaRenderer!.Arena = arena;
+        _arenaRenderer.Match = _match;
         _arenaRenderer.QueueRedraw();
         _debugOverlay!.Match = _match;
         GD.Print($"Restarted: {TreeNames[Tree0Index % TreeNames.Length]} vs {TreeNames[Tree1Index % TreeNames.Length]}");

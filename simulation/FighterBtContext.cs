@@ -14,18 +14,24 @@ public class FighterBtContext : IBtContext
     private readonly Fighter _opponent;
     private readonly Arena _arena;
     private readonly int _tick;
+    private readonly Match? _match;
 
     public int CurrentTick => _tick;
 
     /// <summary>Optional callback invoked with the action name when an action succeeds.</summary>
     public Action<string>? OnActionExecuted { get; set; }
 
+    /// <summary>Legacy constructor (no match reference — map feature variables return 0).</summary>
     public FighterBtContext(Fighter fighter, Fighter opponent, Arena arena, int tick)
+        : this(fighter, opponent, arena, tick, null) { }
+
+    public FighterBtContext(Fighter fighter, Fighter opponent, Arena arena, int tick, Match? match)
     {
         _fighter = fighter;
         _opponent = opponent;
         _arena = arena;
         _tick = tick;
+        _match = match;
     }
 
     // ── Variable resolution ──
@@ -63,8 +69,92 @@ public class FighterBtContext : IBtContext
         "opponent_dir_x" => _opponent.Position.X > _fighter.Position.X ? 1f : -1f,
         "opponent_dir_y" => _opponent.Position.Y > _fighter.Position.Y ? 1f : -1f,
 
-        _ => 0f
+        // ── Map awareness: static geometry ──
+        "arena_width" => _arena.Config.Width,
+        "arena_height" => _arena.Config.Height,
+        "platform_count" => _arena.Config.Platforms.Count,
+        "hazard_count" => _arena.Config.HazardZones.Count,
+        "has_shrink" => _arena.Config.Shrink != null ? 1f : 0f,
+        "has_ceiling" => _arena.Config.Ceiling != null ? 1f : 0f,
+        "has_bumpers" => _arena.Config.CornerBumpers.Count > 0 ? 1f : 0f,
+        "has_friction" => _arena.Config.WallFrictionZones.Count > 0 ? 1f : 0f,
+        "wall_count" => _arena.Config.DestructibleWalls.Count,
+        "pickup_count" => _arena.Config.Pickups.Count,
+
+        // ── Map awareness: dynamic state ──
+        "on_platform" => _arena.IsOnPlatform(_fighter.Position, _fighter.BodyRadius, _fighter.Velocity) ? 1f : 0f,
+        "on_hazard" => (_arena.IsOnGround(_fighter.Position, _fighter.BodyRadius) && _arena.IsInHazardZone(_fighter.Position)) ? 1f : 0f,
+        "in_friction_zone" => _arena.IsInWallFrictionZone(_fighter.Position, _fighter.BodyRadius) ? 1f : 0f,
+
+        // Nearest platform
+        "nearest_platform_dist" => _arena.Config.Platforms.Count > 0
+            ? _arena.DistanceToNearestPlatform(_fighter.Position) : 0f,
+
+        // Effective arena bounds (accounts for shrink)
+        "arena_left" => _match?.EffectiveLeft ?? _arena.Bounds.Position.X,
+        "arena_right" => _match?.EffectiveRight ?? _arena.Bounds.End.X,
+
+        // Indexed variables handled below
+        _ => ResolveIndexedVariable(name)
     };
+
+    private float ResolveIndexedVariable(string name)
+    {
+        // Platform indexed: platform_N_x, platform_N_y, platform_N_w
+        if (name.StartsWith("platform_") && name.Length > 10)
+        {
+            var parts = name.Split('_');
+            if (parts.Length == 3 && int.TryParse(parts[1], out int idx)
+                && idx >= 0 && idx < _arena.Config.Platforms.Count)
+            {
+                var plat = _arena.Config.Platforms[idx];
+                return parts[2] switch
+                {
+                    "x" => plat.X,
+                    "y" => plat.Y,
+                    "w" => plat.Width,
+                    _ => 0f
+                };
+            }
+        }
+
+        // Destructible wall indexed: wall_N_hp, wall_N_exists
+        if (name.StartsWith("wall_") && _match != null)
+        {
+            var parts = name.Split('_');
+            if (parts.Length == 3 && int.TryParse(parts[1], out int idx)
+                && idx >= 0 && idx < _match.DestructibleWallHp.Length)
+            {
+                return parts[2] switch
+                {
+                    "hp" => _match.DestructibleWallHp[idx],
+                    "exists" => _match.DestructibleWallExists[idx] ? 1f : 0f,
+                    _ => 0f
+                };
+            }
+        }
+
+        // Pickup indexed: pickup_N_active, pickup_N_x, pickup_N_y, pickup_N_dist
+        if (name.StartsWith("pickup_") && _match != null)
+        {
+            var parts = name.Split('_');
+            if (parts.Length == 3 && int.TryParse(parts[1], out int idx)
+                && idx >= 0 && idx < _arena.Config.Pickups.Count)
+            {
+                var pickup = _arena.Config.Pickups[idx];
+                return parts[2] switch
+                {
+                    "active" => _match.PickupActive[idx] ? 1f : 0f,
+                    "x" => pickup.X,
+                    "y" => pickup.Y,
+                    "dist" => _fighter.Position.DistanceTo(new Vector2(pickup.X, pickup.Y)),
+                    _ => 0f
+                };
+            }
+        }
+
+        return 0f;
+    }
 
     // ── Action execution ──
 
