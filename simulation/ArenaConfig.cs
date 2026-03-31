@@ -153,13 +153,13 @@ public static class ArenaMaps
         Platforms = [new PlatformConfig { X = 750f, Y = 400f, Width = 300f }]
     };
 
-    /// <summary>Damage strips at 25% and 75% width, punishing passive spawn camping.</summary>
+    /// <summary>Damage strips flanking center, forcing fighters to cross or fight on them.</summary>
     public static ArenaConfig HazardStrips => new()
     {
         HazardZones =
         [
-            new HazardZoneConfig { X = 275f, Width = 200f },
-            new HazardZoneConfig { X = 1025f, Width = 200f }
+            new HazardZoneConfig { X = 550f, Width = 150f, DamagePerSecond = 3f },
+            new HazardZoneConfig { X = 800f, Width = 150f, DamagePerSecond = 3f }
         ]
     };
 
@@ -181,10 +181,10 @@ public static class ArenaMaps
         Ceiling = new CeilingConfig { EdgeY = 10f, CenterY = 60f }
     };
 
-    /// <summary>Arena shrinks in the last 20% of the match.</summary>
+    /// <summary>Arena shrinks starting early (25% into the match) to guarantee the feature activates.</summary>
     public static ArenaConfig PressureRing => new()
     {
-        Shrink = new ArenaShrinkConfig()
+        Shrink = new ArenaShrinkConfig { StartFraction = 0.25f }
     };
 
     /// <summary>Kitchen sink: platform + hazards + bumpers + pickup + shrink.</summary>
@@ -193,8 +193,8 @@ public static class ArenaMaps
         Platforms = [new PlatformConfig { X = 750f, Y = 400f, Width = 300f }],
         HazardZones =
         [
-            new HazardZoneConfig { X = 275f, Width = 200f },
-            new HazardZoneConfig { X = 1025f, Width = 200f }
+            new HazardZoneConfig { X = 550f, Width = 150f, DamagePerSecond = 3f },
+            new HazardZoneConfig { X = 800f, Width = 150f, DamagePerSecond = 3f }
         ],
         CornerBumpers =
         [

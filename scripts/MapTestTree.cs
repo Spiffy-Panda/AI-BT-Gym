@@ -162,21 +162,19 @@ public static class MapTestTree
         );
 
     /// <summary>
-    /// Dipped ceiling approach: when far from opponent on a dipped ceiling map,
-    /// grapple to the low center ceiling for a fast swing approach.
-    /// Only fires from ground in center zone — doesn't loop in the air.
+    /// Dipped ceiling approach: move toward center where the ceiling is lowest.
+    /// The attack layer's fists aimed at the opponent will naturally hit the low
+    /// ceiling and auto-lock, creating grapple anchors without explicit launch_up.
     /// </summary>
     private static BtNode CeilingApproach() =>
         Seq("ceiling_approach",
             Cond(HasDippedCeiling),
             Cond(OutOfRange(300)),
             Cond(Grounded),
-            // Must be in the center zone where ceiling is lowest
-            Cond("pos_x > 400"),
-            Cond("pos_x < 1100"),
+            // Move toward center where ceiling is lowest (for indirect ceiling grapple)
             Sel(
-                // Launch upward for ceiling grapple — attack layer handles lock/retract
-                Seq(Cond(RightReady), Act("launch_right_up")),
+                Seq(Cond("pos_x < 500"), Act("move_right")),
+                Seq(Cond("pos_x > 1000"), Act("move_left")),
                 Act("move_toward_opponent")
             )
         );
