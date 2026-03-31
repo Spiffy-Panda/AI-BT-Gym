@@ -516,7 +516,8 @@ public partial class ReplayRunner : Node2D
 
         AddChild(new BeaconArenaRenderer
         {
-            Arena = arena, Beacons = _beacons, TeamAColor = colorA, TeamBColor = colorB
+            Arena = arena, Beacons = _beacons, Match = _beaconMatchRef,
+            TeamAColor = colorA, TeamBColor = colorB
         });
         foreach (var pawn in _pawns)
         {
