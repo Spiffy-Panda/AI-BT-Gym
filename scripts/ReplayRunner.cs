@@ -72,6 +72,7 @@ public partial class ReplayRunner : Node2D
     // ── Live objects (renderers read from these) ──
     // Fight mode
     private Fighter? _fighter0, _fighter1;
+    private Match? _replayMatch; // holds mutable feature state for ArenaRenderer
     // Beacon mode
     private Pawn[]? _pawns;
     private Beacon[]? _beacons;
@@ -89,6 +90,12 @@ public partial class ReplayRunner : Node2D
         // Fight mode (2 fighters, 4 fists)
         public FighterSnap[]? Fighters; // [2]
         public FistSnap[]? Fists;       // [4]: L0, R0, L1, R1
+
+        // Feature state (fight mode, for arena renderer)
+        public float[]? WallHp;
+        public bool[]? WallExists;
+        public bool[]? PickupActive;
+        public float EffectiveLeft, EffectiveRight;
 
         // Beacon mode
         public PawnSnap[]? Pawns;       // [N]
@@ -260,7 +267,8 @@ public partial class ReplayRunner : Node2D
     private void PreSimulateFight()
     {
         var rd = _fightReplayData!;
-        var arena = new Arena(rd.Arena.Width, rd.Arena.Height);
+        // Use the full arena config from replay data (includes platforms, hazards, walls, etc.)
+        var arena = rd.Arena.Config != null ? new Arena(rd.Arena.Config) : new Arena(rd.Arena.Width, rd.Arena.Height);
         var match = new Match(arena, rd.FighterTrees[0], rd.FighterTrees[1], seed: rd.MatchSeed);
 
         // Capture initial state (tick 0, before any step — NOT a checkpoint)
@@ -308,6 +316,12 @@ public partial class ReplayRunner : Node2D
             CapFist(m.Fighter0.LeftFist), CapFist(m.Fighter0.RightFist),
             CapFist(m.Fighter1.LeftFist), CapFist(m.Fighter1.RightFist)
         ],
+        // Feature state
+        WallHp = m.DestructibleWallHp.Length > 0 ? (float[])m.DestructibleWallHp.Clone() : null,
+        WallExists = m.DestructibleWallExists.Length > 0 ? (bool[])m.DestructibleWallExists.Clone() : null,
+        PickupActive = m.PickupActive.Length > 0 ? (bool[])m.PickupActive.Clone() : null,
+        EffectiveLeft = m.EffectiveLeft,
+        EffectiveRight = m.EffectiveRight,
         IsOver = m.IsOver,
         WinnerIdx = m.WinnerIndex
     };
@@ -427,16 +441,19 @@ public partial class ReplayRunner : Node2D
     private void BuildFightScene()
     {
         var rd = _fightReplayData!;
-        var arena = new Arena(rd.Arena.Width, rd.Arena.Height);
+        var arena = rd.Arena.Config != null ? new Arena(rd.Arena.Config) : new Arena(rd.Arena.Width, rd.Arena.Height);
 
-        AddChild(new ArenaRenderer { Arena = arena });
+        // Create a dummy match to hold mutable feature state for the renderer.
+        // We use a noop BT — the match is never stepped, just used as a data container.
+        var noopTree = new List<BtNode> { BtNode.Act("noop") };
+        _replayMatch = new Match(arena, noopTree, noopTree);
+
+        AddChild(new ArenaRenderer { Arena = arena, Match = _replayMatch });
         AddChild(new FighterRenderer { Fighter = _fighter0!, TeamColor = new Color(0.9f, 0.2f, 0.2f) });
         AddChild(new FighterRenderer { Fighter = _fighter1!, TeamColor = new Color(0.3f, 0.5f, 1f) });
 
         var canvasLayer = new CanvasLayer();
         AddChild(canvasLayer);
-        // DebugOverlay needs a Match reference for tick/time — create a lightweight wrapper
-        // Instead, add a simple label
         AddControlBar(canvasLayer);
         _hasMatch = true;
     }
@@ -510,6 +527,19 @@ public partial class ReplayRunner : Node2D
         {
             ApplyFighterSnap(_fighter0!, snap.Fighters[0], snap.Fists[0], snap.Fists[1]);
             ApplyFighterSnap(_fighter1!, snap.Fighters[1], snap.Fists[2], snap.Fists[3]);
+
+            // Restore feature state so ArenaRenderer draws walls/pickups/shrink correctly
+            if (_replayMatch != null)
+            {
+                if (snap.WallHp != null)
+                    Array.Copy(snap.WallHp, _replayMatch.DestructibleWallHp, snap.WallHp.Length);
+                if (snap.WallExists != null)
+                    Array.Copy(snap.WallExists, _replayMatch.DestructibleWallExists, snap.WallExists.Length);
+                if (snap.PickupActive != null)
+                    Array.Copy(snap.PickupActive, _replayMatch.PickupActive, snap.PickupActive.Length);
+                _replayMatch.EffectiveLeft = snap.EffectiveLeft;
+                _replayMatch.EffectiveRight = snap.EffectiveRight;
+            }
         }
         else if (_isBeaconBrawl && snap.Pawns != null && _pawns != null)
         {

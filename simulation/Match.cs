@@ -47,10 +47,10 @@ public class Match
     public int[] PickupRespawnTimer { get; private set; } = [];
 
     /// <summary>Current effective left boundary (accounts for arena shrink).</summary>
-    public float EffectiveLeft { get; private set; }
+    public float EffectiveLeft { get; set; }
 
     /// <summary>Current effective right boundary (accounts for arena shrink).</summary>
-    public float EffectiveRight { get; private set; }
+    public float EffectiveRight { get; set; }
 
     /// <summary>Cumulative hazard zone damage taken by each fighter (index 0 and 1).</summary>
     public float[] HazardDamageTaken { get; } = [0f, 0f];

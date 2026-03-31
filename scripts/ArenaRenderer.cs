@@ -32,6 +32,13 @@ public partial class ArenaRenderer : Node2D
         QueueRedraw();
     }
 
+    public override void _Process(double delta)
+    {
+        // Redraw every frame when a match is attached (feature state changes over time)
+        if (Match != null)
+            QueueRedraw();
+    }
+
     public override void _Draw()
     {
         if (Arena == null) return;
