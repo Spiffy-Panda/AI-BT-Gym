@@ -12,6 +12,11 @@
       "name": "Game (Visual)",
       "runtimeExecutable": "C:\\Program Files\\godot\\godot_console.exe",
       "runtimeArgs": ["--scene", "res://scenes/main.tscn"]
+    },
+    {
+      "name": "Kill All Godot",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "taskkill /F /IM godot.exe 2>nul & taskkill /F /IM godot_console.exe 2>nul & echo All Godot processes killed. & ping -n 6 127.0.0.1 >nul"]
     }
   ]
 }
