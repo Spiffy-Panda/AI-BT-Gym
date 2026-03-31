@@ -39,20 +39,19 @@ public static class MapTests
         ("KingOfTheHill", ArenaMaps.KingOfTheHill),
         ("HazardStrips", ArenaMaps.HazardStrips),
         ("CenterWall", ArenaMaps.CenterWall),
-        ("Bumpers", ArenaMaps.Bumpers),
         ("HealthPickup", ArenaMaps.HealthPickup),
         ("DippedCeiling", ArenaMaps.DippedCeiling),
-        ("StickyWalls", ArenaMaps.StickyWalls),
         ("PressureRing", ArenaMaps.PressureRing),
         ("CombinedArena", ArenaMaps.CombinedArena),
     ];
 
-    /// <summary>Run self-play on every map preset. Returns results for each.</summary>
+    /// <summary>Run self-play on every map preset, plus asymmetric knowledge tests.</summary>
     public static List<MapTestResult> RunAll()
     {
         var tree = AiBtGym.Godot.MapTestTree.Build();
         var results = new List<MapTestResult>();
 
+        // Symmetric self-play (both see the real config)
         foreach (var (name, config) in Presets)
         {
             try
@@ -64,6 +63,29 @@ public static class MapTests
                 results.Add(new MapTestResult
                 {
                     MapName = name, Passed = false,
+                    Error = $"EXCEPTION: {e.Message}"
+                });
+            }
+        }
+
+        // Asymmetric knowledge tests: informed vs blind on each non-Flat map.
+        // F0 = informed (sees real config), F1 = blind (sees Flat).
+        // Tests that map awareness provides a competitive advantage.
+        var flatConfig = ArenaMaps.Flat;
+        foreach (var (name, config) in Presets)
+        {
+            if (name == "Flat") continue;
+            try
+            {
+                results.Add(RunAsymmetric($"{name}_InformedVsBlind", config, tree,
+                    knownConfig0: null,         // F0 sees truth
+                    knownConfig1: flatConfig));  // F1 thinks it's a flat arena
+            }
+            catch (Exception e)
+            {
+                results.Add(new MapTestResult
+                {
+                    MapName = $"{name}_InformedVsBlind", Passed = false,
                     Error = $"EXCEPTION: {e.Message}"
                 });
             }
@@ -134,6 +156,75 @@ public static class MapTests
         };
 
         // ── Check 3: Feature-specific validation ──
+        ValidateFeatures(config, match, notes, errors);
+
+        string? error = errors.Count > 0 ? string.Join("; ", errors) : null;
+
+        return new MapTestResult
+        {
+            MapName = mapName,
+            Passed = errors.Count == 0,
+            Error = error,
+            DurationTicks = match.Tick,
+            Fighter0Hp = hp0,
+            Fighter1Hp = hp1,
+            WinnerIndex = match.WinnerIndex,
+            FeatureNotes = notes
+        };
+    }
+
+    /// <summary>
+    /// Run a match where F0 and F1 have different map knowledge.
+    /// Both use the same BT; the only difference is what each is told about the map.
+    /// </summary>
+    private static MapTestResult RunAsymmetric(string mapName, ArenaConfig config,
+        List<BtNode> tree, ArenaConfig? knownConfig0, ArenaConfig? knownConfig1)
+    {
+        var arena = new Arena(config);
+        var match = new Match(arena, tree, tree, seed: 42);
+        match.KnownConfig0 = knownConfig0;
+        match.KnownConfig1 = knownConfig1;
+        match.MaxTicks = 60 * 60;
+
+        var recorder = new MatchRecorder(
+            ["Informed", "Blind"], 0, [0, 0], $"asym_{mapName}");
+        match.Recorder = recorder;
+
+        while (!match.IsOver)
+            match.Step();
+
+        var notes = new Dictionary<string, string>();
+        var errors = new List<string>();
+
+        float hp0 = match.Fighter0.Health;
+        float hp1 = match.Fighter1.Health;
+
+        var log0 = recorder.BuildBattleLog(0);
+        var log1 = recorder.BuildBattleLog(1);
+
+        // Top actions for each fighter
+        var top0 = log0.ActionFrequency.OrderByDescending(kv => kv.Value).Take(4)
+            .Select(kv => $"{kv.Key}={kv.Value}");
+        var top1 = log1.ActionFrequency.OrderByDescending(kv => kv.Value).Take(4)
+            .Select(kv => $"{kv.Key}={kv.Value}");
+        notes["informed_actions"] = string.Join(", ", top0);
+        notes["blind_actions"] = string.Join(", ", top1);
+
+        notes["outcome"] = match.WinnerIndex switch
+        {
+            0 => $"Informed wins ({hp0:F0} vs {hp1:F0})",
+            1 => $"Blind wins ({hp1:F0} vs {hp0:F0})",
+            _ => $"Draw ({hp0:F0} vs {hp1:F0})"
+        };
+
+        // The informed fighter should do at least as well as the blind one.
+        // We don't fail if blind wins (seed RNG can cause that), but we note it.
+        float hpAdvantage = hp0 - hp1;
+        notes["hp_advantage"] = $"informed {(hpAdvantage >= 0 ? "+" : "")}{hpAdvantage:F0}";
+
+        notes["duration"] = $"{match.Tick} ticks ({match.Tick / 60f:F1}s)";
+
+        // Validate features were exercised
         ValidateFeatures(config, match, notes, errors);
 
         string? error = errors.Count > 0 ? string.Join("; ", errors) : null;

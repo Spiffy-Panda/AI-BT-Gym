@@ -17,7 +17,12 @@ using AiBtGym.BehaviorTree;
 namespace AiBtGym.Simulation;
 
 /// <summary>A fighter entry in a tournament: name, BT roots, and optional C# source.</summary>
-public record TournamentEntry(string Name, List<BtNode> Roots, int BtVersion = 0, string? CSharpSource = null, string? Color = null);
+/// <param name="KnownConfig">
+/// What this fighter's BT is told the map looks like. Null = full knowledge.
+/// Use this to test whether knowing about specific features improves performance.
+/// </param>
+public record TournamentEntry(string Name, List<BtNode> Roots, int BtVersion = 0,
+    string? CSharpSource = null, string? Color = null, ArenaConfig? KnownConfig = null);
 
 public static class Tournament
 {
@@ -115,6 +120,8 @@ public static class Tournament
                     // Create and run match with randomized starting positions
                     var arena = new Arena(arenaConfig);
                     var match = new Match(arena, entries[i].Roots, entries[j].Roots, seed: matchSeed);
+                    match.KnownConfig0 = entries[i].KnownConfig;
+                    match.KnownConfig1 = entries[j].KnownConfig;
                     var recorder = new MatchRecorder(
                         [entries[i].Name, entries[j].Name],
                         generation,

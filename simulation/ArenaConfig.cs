@@ -169,18 +169,6 @@ public static class ArenaMaps
         DestructibleWalls = [new DestructibleWallConfig { X = 750f, BottomY = 660f }]
     };
 
-    /// <summary>Diagonal bumpers in all four corners.</summary>
-    public static ArenaConfig Bumpers => new()
-    {
-        CornerBumpers =
-        [
-            new CornerBumperConfig { Corner = "top_left" },
-            new CornerBumperConfig { Corner = "top_right" },
-            new CornerBumperConfig { Corner = "bottom_left" },
-            new CornerBumperConfig { Corner = "bottom_right" }
-        ]
-    };
-
     /// <summary>Health pickup at center ground.</summary>
     public static ArenaConfig HealthPickup => new()
     {
@@ -191,16 +179,6 @@ public static class ArenaMaps
     public static ArenaConfig DippedCeiling => new()
     {
         Ceiling = new CeilingConfig { EdgeY = 10f, CenterY = 60f }
-    };
-
-    /// <summary>Sticky upper walls on both sides.</summary>
-    public static ArenaConfig StickyWalls => new()
-    {
-        WallFrictionZones =
-        [
-            new WallFrictionZoneConfig { Side = "left", TopY = 10f, BottomY = 210f },
-            new WallFrictionZoneConfig { Side = "right", TopY = 10f, BottomY = 210f }
-        ]
     };
 
     /// <summary>Arena shrinks in the last 20% of the match.</summary>

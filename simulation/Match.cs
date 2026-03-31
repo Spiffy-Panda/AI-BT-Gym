@@ -25,6 +25,13 @@ public class Match
     private readonly BehaviorTreeRunner _bt0;
     private readonly BehaviorTreeRunner _bt1;
 
+    /// <summary>
+    /// What each fighter's BT is told the map looks like. Null = full knowledge (sees real arena).
+    /// This lets you test whether knowing about specific features improves a BT's performance.
+    /// </summary>
+    public ArenaConfig? KnownConfig0 { get; set; }
+    public ArenaConfig? KnownConfig1 { get; set; }
+
     // ── Mutable feature state ──
 
     /// <summary>Current HP for each destructible wall (indexed same as Arena.Config.DestructibleWalls).</summary>
@@ -131,9 +138,9 @@ public class Match
     {
         if (IsOver) return;
 
-        // Run behavior trees
-        var ctx0 = new FighterBtContext(Fighter0, Fighter1, Arena, Tick, this);
-        var ctx1 = new FighterBtContext(Fighter1, Fighter0, Arena, Tick, this);
+        // Run behavior trees — each fighter sees its own known config (or the real arena if null)
+        var ctx0 = new FighterBtContext(Fighter0, Fighter1, Arena, Tick, this, KnownConfig0);
+        var ctx1 = new FighterBtContext(Fighter1, Fighter0, Arena, Tick, this, KnownConfig1);
 
         // Wire up action recording if a recorder is attached
         if (Recorder != null)
