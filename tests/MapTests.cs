@@ -30,6 +30,8 @@ public static class MapTests
         public float Fighter1Hp { get; init; }
         public int WinnerIndex { get; init; }
         public Dictionary<string, string> FeatureNotes { get; init; } = new();
+        /// <summary>Full battle log with replay data for Godot replay viewer.</summary>
+        public BattleLog? BattleLog { get; init; }
     }
 
     /// <summary>All arena presets to test, with their configs.</summary>
@@ -160,6 +162,9 @@ public static class MapTests
 
         string? error = errors.Count > 0 ? string.Join("; ", errors) : null;
 
+        // Build battle log with replay data for Godot replay viewer
+        var battleLog = log0 with { Replay = recorder.BuildReplayData(tree, tree, arena, matchSeed: 42) };
+
         return new MapTestResult
         {
             MapName = mapName,
@@ -169,7 +174,8 @@ public static class MapTests
             Fighter0Hp = hp0,
             Fighter1Hp = hp1,
             WinnerIndex = match.WinnerIndex,
-            FeatureNotes = notes
+            FeatureNotes = notes,
+            BattleLog = battleLog
         };
     }
 
@@ -229,6 +235,9 @@ public static class MapTests
 
         string? error = errors.Count > 0 ? string.Join("; ", errors) : null;
 
+        // Build battle log with replay data for Godot replay viewer
+        var battleLog = log0 with { Replay = recorder.BuildReplayData(tree, tree, arena, matchSeed: 42) };
+
         return new MapTestResult
         {
             MapName = mapName,
@@ -238,7 +247,8 @@ public static class MapTests
             Fighter0Hp = hp0,
             Fighter1Hp = hp1,
             WinnerIndex = match.WinnerIndex,
-            FeatureNotes = notes
+            FeatureNotes = notes,
+            BattleLog = battleLog
         };
     }
 

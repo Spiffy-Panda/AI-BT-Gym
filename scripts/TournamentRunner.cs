@@ -32,6 +32,8 @@ public partial class TournamentRunner : Node
     private readonly object _runningLock = new();
     private readonly Dictionary<string, GenerationSummary> _lastSummaries = new();
     private List<TestResult>? _lastTestResults;
+    private List<MapTests.MapTestResult>? _lastMapTestResults;
+    private string _mapTestDir = "";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -43,6 +45,7 @@ public partial class TournamentRunner : Node
     {
         _projectDir = ProjectSettings.GlobalizePath("res://");
         _outputPath = Path.Combine(_projectDir, "generations");
+        _mapTestDir = Path.Combine(_projectDir, "map_test_replays");
 
         var port = System.Environment.GetEnvironmentVariable("PORT") ?? "8585";
         _listener = new HttpListener();
@@ -120,6 +123,10 @@ public partial class TournamentRunner : Node
                 await RunTests(res);
             else if (path == "/api/tests/results" && method == "GET")
                 await ServeJson(res, _lastTestResults ?? new List<TestResult>());
+            else if (path == "/api/tests/map-results" && method == "GET")
+                await ServeMapTestResults(res);
+            else if (path == "/api/tests/map-launch" && method == "POST")
+                await LaunchMapTestReplay(req, res);
 
             // ── Tournament list ──
             else if (path == "/api/tournaments" && method == "GET")
@@ -575,13 +582,126 @@ public partial class TournamentRunner : Node
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         _lastTestResults = MovementTests.RunAll();
+        _lastMapTestResults = MapTests.RunAll();
         stopwatch.Stop();
 
         int passed = _lastTestResults.Count(r => r.Passed);
         int failed = _lastTestResults.Count(r => !r.Passed);
-        GD.Print($"Tests: {passed} passed, {failed} failed in {stopwatch.ElapsedMilliseconds}ms");
+        int mapPassed = _lastMapTestResults.Count(r => r.Passed);
+        int mapFailed = _lastMapTestResults.Count(r => !r.Passed);
+        GD.Print($"Tests: {passed} passed, {failed} failed; Map: {mapPassed} passed, {mapFailed} failed in {stopwatch.ElapsedMilliseconds}ms");
 
-        await ServeJson(res, new { elapsed_ms = stopwatch.ElapsedMilliseconds, passed, failed, results = _lastTestResults });
+        // Save map test battle logs to disk for replay launching
+        SaveMapTestBattleLogs();
+
+        // Slim map results for the response (no full BattleLog — it's huge)
+        var slimMapResults = _lastMapTestResults.Select(r => new
+        {
+            map_name = r.MapName, passed = r.Passed, error = r.Error,
+            duration_ticks = r.DurationTicks,
+            fighter0_hp = r.Fighter0Hp, fighter1_hp = r.Fighter1Hp,
+            winner_index = r.WinnerIndex, feature_notes = r.FeatureNotes,
+            has_replay = r.BattleLog?.Replay != null
+        });
+
+        await ServeJson(res, new
+        {
+            elapsed_ms = stopwatch.ElapsedMilliseconds,
+            passed, failed, results = _lastTestResults,
+            map_passed = mapPassed, map_failed = mapFailed, map_results = slimMapResults
+        });
+    }
+
+    private void SaveMapTestBattleLogs()
+    {
+        if (_lastMapTestResults == null) return;
+        Directory.CreateDirectory(_mapTestDir);
+
+        // Clean old files
+        foreach (var f in Directory.GetFiles(_mapTestDir, "*.json"))
+            File.Delete(f);
+
+        foreach (var r in _lastMapTestResults)
+        {
+            if (r.BattleLog == null) continue;
+            var path = Path.Combine(_mapTestDir, $"{r.MapName}.json");
+            var json = JsonSerializer.Serialize(r.BattleLog, TournamentJson.Options);
+            File.WriteAllText(path, json);
+        }
+    }
+
+    private async System.Threading.Tasks.Task ServeMapTestResults(HttpListenerResponse res)
+    {
+        if (_lastMapTestResults == null)
+        {
+            await ServeJson(res, Array.Empty<object>());
+            return;
+        }
+        // Serve without the full BattleLog to keep the response small
+        var slim = _lastMapTestResults.Select(r => new
+        {
+            map_name = r.MapName,
+            passed = r.Passed,
+            error = r.Error,
+            duration_ticks = r.DurationTicks,
+            fighter0_hp = r.Fighter0Hp,
+            fighter1_hp = r.Fighter1Hp,
+            winner_index = r.WinnerIndex,
+            feature_notes = r.FeatureNotes,
+            has_replay = r.BattleLog?.Replay != null
+        });
+        await ServeJson(res, slim);
+    }
+
+    private async System.Threading.Tasks.Task LaunchMapTestReplay(HttpListenerRequest req, HttpListenerResponse res)
+    {
+        string body;
+        using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
+            body = await reader.ReadToEndAsync();
+
+        var payload = JsonSerializer.Deserialize<JsonElement>(body);
+        var mapName = payload.TryGetProperty("map", out var m) ? m.GetString() ?? "" : "";
+
+        if (string.IsNullOrEmpty(mapName))
+        {
+            res.StatusCode = 400;
+            await ServeJson(res, new { error = "Missing map name" });
+            return;
+        }
+
+        var battleLogPath = Path.Combine(_mapTestDir, $"{mapName}.json");
+        if (!File.Exists(battleLogPath))
+        {
+            res.StatusCode = 404;
+            await ServeJson(res, new { error = $"No battle log for map '{mapName}'. Run tests first." });
+            return;
+        }
+
+        // Write replay config
+        var configPath = Path.Combine(_projectDir, "replay_config.json");
+        var configJson = JsonSerializer.Serialize(new { battle_log_path = battleLogPath }, TournamentJson.Options);
+        File.WriteAllText(configPath, configJson);
+
+        // Launch Godot with replay scene
+        var godotPath = @"C:\Program Files\godot\godot.exe";
+        var args = $"--path \"{_projectDir}\" --scene res://scenes/replay.tscn";
+        GD.Print($"Launching map test replay ({mapName}): {godotPath} {args}");
+
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(godotPath, args)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = _projectDir
+            };
+            System.Diagnostics.Process.Start(psi);
+            await ServeJson(res, new { status = "launched", map = mapName, battle_log = battleLogPath });
+        }
+        catch (Exception ex)
+        {
+            res.StatusCode = 500;
+            await ServeJson(res, new { error = $"Failed to launch Godot: {ex.Message}" });
+        }
     }
 
     private async System.Threading.Tasks.Task ServeTestPage(HttpListenerResponse res)
@@ -1250,6 +1370,8 @@ loadTournaments().then(() => restoreFromHash());
   .speed-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   input[type=range] { flex: 1; accent-color: var(--accent); }
   .tick-info { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 80px; text-align: right; }
+  .metric { display: inline-block; background: var(--bg); padding: 3px 8px; border-radius: 4px; font-size: 12px; }
+  .metric span { color: var(--dim); }
   .nav { margin-bottom: 12px; font-size: 13px; }
   .nav a { color: var(--accent); text-decoration: none; } .nav a:hover { text-decoration: underline; }
 </style>
@@ -1257,13 +1379,17 @@ loadTournaments().then(() => restoreFromHash());
 <body>
 <div class="nav"><a href="/">Tournaments</a> | <strong>Tests</strong></div>
 <div class="header">
-  <div><h1>Movement Tests</h1><p class="subtitle">End-to-end physics and behavior tests with visual replay</p></div>
-  <div style="display:flex;align-items:center"><button id="runBtn" onclick="runTests()">Run Tests</button><span id="statusText" class="status"></span></div>
+  <div><h1>Tests</h1><p class="subtitle">Movement tests with visual replay + Map self-play tests with Godot replay</p></div>
+  <div style="display:flex;align-items:center"><button id="runBtn" onclick="runTests()">Run All Tests</button><span id="statusText" class="status"></span></div>
 </div>
+<h2 style="color:var(--accent);margin:16px 0 8px">Movement Tests</h2>
 <div id="results"></div>
+<h2 style="color:var(--accent);margin:16px 0 8px">Map Self-Play Tests</h2>
+<div id="mapResults"></div>
 
 <script>
 let testData = null;
+let mapTestData = null;
 let activeReplay = null; // {idx, playing, speed, currentTick, maxTick, lastFrameTime, canvas, ctx}
 
 async function runTests() {
@@ -1273,25 +1399,79 @@ async function runTests() {
   status.textContent = 'Running...';
   try {
     const r = await fetch('/api/tests/run', { method: 'POST' });
-    testData = await r.json();
-    status.textContent = `${testData.passed} passed, ${testData.failed} failed in ${testData.elapsed_ms}ms`;
+    const data = await r.json();
+    testData = { passed: data.passed, failed: data.failed, results: data.results };
+    mapTestData = data.map_results || [];
+    const totalP = data.passed + (data.map_passed || 0);
+    const totalF = data.failed + (data.map_failed || 0);
+    status.textContent = `${totalP} passed, ${totalF} failed in ${data.elapsed_ms}ms`;
     renderResults();
+    renderMapResults();
   } catch(e) { status.textContent = 'Error: ' + e.message; }
   btn.disabled = false;
 }
 
 async function loadCached() {
   try {
-    const r = await fetch('/api/tests/results');
-    const results = await r.json();
+    const [movR, mapR] = await Promise.all([
+      fetch('/api/tests/results'),
+      fetch('/api/tests/map-results')
+    ]);
+    const results = await movR.json();
     if (results.length > 0) {
       const passed = results.filter(r => r.passed).length;
       const failed = results.filter(r => !r.passed).length;
       testData = { passed, failed, results };
-      document.getElementById('statusText').textContent = `${passed} passed, ${failed} failed (cached)`;
       renderResults();
     }
+    const mapResults = await mapR.json();
+    if (mapResults.length > 0) {
+      mapTestData = mapResults;
+      renderMapResults();
+    }
+    // Update combined status
+    const tp = (testData?.passed || 0) + (mapTestData ? mapTestData.filter(r => r.passed).length : 0);
+    const tf = (testData?.failed || 0) + (mapTestData ? mapTestData.filter(r => !r.passed).length : 0);
+    if (tp + tf > 0) document.getElementById('statusText').textContent = `${tp} passed, ${tf} failed (cached)`;
   } catch(e) {}
+}
+
+function renderMapResults() {
+  if (!mapTestData) return;
+  const el = document.getElementById('mapResults');
+  el.innerHTML = mapTestData.map(t => {
+    const outcome = t.feature_notes?.outcome || '';
+    const duration = t.feature_notes?.duration || `${t.duration_ticks} ticks`;
+    const notes = Object.entries(t.feature_notes || {})
+      .filter(([k]) => k !== 'outcome' && k !== 'duration')
+      .map(([k, v]) => `<span class="metric"><span>${k}:</span> ${v}</span>`)
+      .join(' ');
+    return `
+    <div class="card" style="cursor:default">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2>${t.map_name}</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${t.has_replay ? `<button onclick="event.stopPropagation(); launchMapReplay('${t.map_name}')" style="background:#3fb950;padding:6px 14px;font-size:12px">Watch in Godot</button>` : ''}
+          <span class="badge ${t.passed ? 'badge-pass' : 'badge-fail'}">${t.passed ? 'PASS' : 'FAIL'}</span>
+        </div>
+      </div>
+      ${t.error ? `<div class="error-msg">${t.error}</div>` : ''}
+      <div style="color:var(--dim);font-size:13px;margin-top:4px">${outcome} &mdash; ${duration}</div>
+      <div style="margin-top:6px;line-height:1.8">${notes}</div>
+    </div>`;
+  }).join('');
+}
+
+async function launchMapReplay(mapName) {
+  try {
+    const r = await fetch('/api/tests/map-launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ map: mapName })
+    });
+    const data = await r.json();
+    if (data.error) alert('Launch failed: ' + data.error);
+  } catch(e) { alert('Launch error: ' + e.message); }
 }
 
 function renderResults() {

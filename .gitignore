@@ -51,5 +51,8 @@ tournaments/
 # Replay config (transient, written by server)
 replay_config.json
 
+# Map test replay battle logs (transient, written by server)
+map_test_replays/
+
 # Archived experiment data (large replay/tournament files)
 archive/beacon_brawl/tournaments/
