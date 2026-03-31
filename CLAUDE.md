@@ -21,14 +21,25 @@ dotnet build
 ```
 
 ## Key Paths
-- Simulation core: `simulation/`
-- BT system: `simulation/BehaviorTree/`
-- Godot scripts: `scripts/`
-- Tests: `tests/MovementTests.cs` (run via `scenes/test_runner.tscn`)
-- Test BTs: `scripts/TestTrees.cs`
-- Seed AI definitions: `seed_generation/` (`SeedTrees.cs`, `Gen00xTrees.cs`, `SubTrees.cs`)
+- BT system (shared): `simulation/BehaviorTree/`
+- Shared tournament infra: `simulation/{Tournament,TournamentModels,EloCalculator}.cs`
+- Shared scripts: `scripts/{TournamentRunner,TournamentRegistry,ReplayRunner}.cs`, `scripts/web/`
+- Tests: `tests/` (run via `scenes/test_runner.tscn`)
 - Tournament output: `tournaments/` (e.g. `tournaments/beacon_brawl/gen_000/`)
-- Analysis scripts: `tools/`
+
+### Game Modes (scope searches with `*/beacon_brawl/` or `*/dueling_fighters/`)
+- **Beacon Brawl** (team capture-the-beacon):
+  - Simulation: `simulation/beacon_brawl/`
+  - Rendering: `scripts/beacon_brawl/`
+  - Seed AIs: `seed_generation/beacon_brawl/`
+  - Scene: `scenes/beacon_brawl.tscn`
+  - Tools: `tools/beacon_brawl/`
+- **Dueling Fighters** (1v1 melee):
+  - Simulation: `simulation/dueling_fighters/`
+  - Rendering: `scripts/dueling_fighters/`
+  - Seed AIs: `seed_generation/dueling_fighters/`
+  - Scene: `scenes/main.tscn`
+  - Tools: `tools/` (root-level scripts)
 
 ## Tournament Server
 - Scene: `scenes/tournament_runner.tscn`
