@@ -47,10 +47,20 @@ public class Match
     public int[] PickupRespawnTimer { get; private set; } = [];
 
     /// <summary>Current effective left boundary (accounts for arena shrink).</summary>
-    public float EffectiveLeft { get; set; }
+    public float EffectiveLeft
+    {
+        get => _effectiveLeft;
+        set => _effectiveLeft = Mathf.Max(value, Arena.Bounds.Position.X);
+    }
+    private float _effectiveLeft;
 
     /// <summary>Current effective right boundary (accounts for arena shrink).</summary>
-    public float EffectiveRight { get; set; }
+    public float EffectiveRight
+    {
+        get => _effectiveRight;
+        set => _effectiveRight = Mathf.Min(value, Arena.Bounds.End.X);
+    }
+    private float _effectiveRight;
 
     /// <summary>Cumulative hazard zone damage taken by each fighter (index 0 and 1).</summary>
     public float[] HazardDamageTaken { get; } = [0f, 0f];

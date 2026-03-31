@@ -34,10 +34,13 @@ public partial class ArenaRenderer : Node2D
 
     public override void _Process(double delta)
     {
-        // Redraw every frame when a match is attached (feature state changes over time)
-        if (Match != null)
+        // Only redraw every frame if the arena has mutable features (walls, pickups, shrink)
+        if (Match != null && Arena != null && HasMutableFeatures(Arena.Config))
             QueueRedraw();
     }
+
+    private static bool HasMutableFeatures(ArenaConfig config) =>
+        config.DestructibleWalls.Count > 0 || config.Pickups.Count > 0 || config.Shrink != null;
 
     public override void _Draw()
     {

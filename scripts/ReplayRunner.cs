@@ -531,12 +531,15 @@ public partial class ReplayRunner : Node2D
             // Restore feature state so ArenaRenderer draws walls/pickups/shrink correctly
             if (_replayMatch != null)
             {
-                if (snap.WallHp != null)
-                    Array.Copy(snap.WallHp, _replayMatch.DestructibleWallHp, snap.WallHp.Length);
-                if (snap.WallExists != null)
-                    Array.Copy(snap.WallExists, _replayMatch.DestructibleWallExists, snap.WallExists.Length);
-                if (snap.PickupActive != null)
-                    Array.Copy(snap.PickupActive, _replayMatch.PickupActive, snap.PickupActive.Length);
+                if (snap.WallHp != null && _replayMatch.DestructibleWallHp.Length > 0)
+                    Array.Copy(snap.WallHp, _replayMatch.DestructibleWallHp,
+                        Math.Min(snap.WallHp.Length, _replayMatch.DestructibleWallHp.Length));
+                if (snap.WallExists != null && _replayMatch.DestructibleWallExists.Length > 0)
+                    Array.Copy(snap.WallExists, _replayMatch.DestructibleWallExists,
+                        Math.Min(snap.WallExists.Length, _replayMatch.DestructibleWallExists.Length));
+                if (snap.PickupActive != null && _replayMatch.PickupActive.Length > 0)
+                    Array.Copy(snap.PickupActive, _replayMatch.PickupActive,
+                        Math.Min(snap.PickupActive.Length, _replayMatch.PickupActive.Length));
                 _replayMatch.EffectiveLeft = snap.EffectiveLeft;
                 _replayMatch.EffectiveRight = snap.EffectiveRight;
             }
