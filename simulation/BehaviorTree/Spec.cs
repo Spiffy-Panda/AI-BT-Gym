@@ -117,6 +117,10 @@ public static class Var
     public static readonly VarRef ArenaLeft = new("arena_left");
     public static readonly VarRef ArenaRight = new("arena_right");
 
+    // ── Opponent map state ──
+    public static readonly VarRef OpponentOnPlatform = new("opponent_on_platform");
+    public static readonly VarRef OpponentOnHazard = new("opponent_on_hazard");
+
     // Indexed map variables — use VarRef("pickup_0_active") etc. for specific indices
     public static VarRef PickupActive(int i) => new($"pickup_{i}_active");
     public static VarRef PickupX(int i) => new($"pickup_{i}_x");
@@ -197,4 +201,6 @@ public static class When
     public static ISpec PickupAvailable(int i = 0) => Var.PickupActive(i).Eq(1);
     public static ISpec PickupClose(int i, float dist) => Var.PickupDist(i).Lt(dist);
     public static ISpec WallStillStanding(int i = 0) => Var.WallExists(i).Eq(1);
+    public static readonly ISpec OpponentIsOnPlatform = Var.OpponentOnPlatform.Eq(1);
+    public static readonly ISpec OpponentIsOnHazard = Var.OpponentOnHazard.Eq(1);
 }

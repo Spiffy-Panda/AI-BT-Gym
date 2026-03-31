@@ -116,6 +116,10 @@ public class FighterBtContext : IBtContext
         "arena_left" => _match?.EffectiveLeft ?? _arena.Bounds.Position.X,
         "arena_right" => _match?.EffectiveRight ?? _arena.Bounds.End.X,
 
+        // Opponent map state (uses real arena)
+        "opponent_on_platform" => _arena.IsOnPlatform(_opponent.Position, _opponent.BodyRadius, _opponent.Velocity) ? 1f : 0f,
+        "opponent_on_hazard" => (_arena.IsOnGround(_opponent.Position, _opponent.BodyRadius) && _arena.IsInHazardZone(_opponent.Position)) ? 1f : 0f,
+
         // Indexed variables handled below
         _ => ResolveIndexedVariable(name)
     };
@@ -230,6 +234,10 @@ public class FighterBtContext : IBtContext
             "detach_left" => Do(() => _fighter.LeftFist.Detach()),
             "detach_right" => Do(() => _fighter.RightFist.Detach()),
 
+            // Launch at nearest platform surface (for grapple attachment)
+            "launch_left_at_platform" => LaunchAtNearestPlatform(_fighter.LeftFist),
+            "launch_right_at_platform" => LaunchAtNearestPlatform(_fighter.RightFist),
+
             // Movement
             "move_left" => ApplyMove(-1f),
             "move_right" => ApplyMove(1f),
@@ -248,6 +256,28 @@ public class FighterBtContext : IBtContext
 
     private BtStatus LaunchAt(Fist fist, Vector2 target)
     {
+        var dir = (target - _fighter.Position).Normalized();
+        return fist.Launch(dir) ? BtStatus.Success : BtStatus.Failure;
+    }
+
+    private BtStatus LaunchAtNearestPlatform(Fist fist)
+    {
+        // Use known config for platform awareness
+        if (_knownConfig.Platforms.Count == 0) return BtStatus.Failure;
+
+        // Find nearest known platform
+        PlatformConfig? nearest = null;
+        float bestDist = float.MaxValue;
+        foreach (var plat in _knownConfig.Platforms)
+        {
+            float dist = _fighter.Position.DistanceTo(new Vector2(plat.X, plat.Y));
+            if (dist < bestDist) { bestDist = dist; nearest = plat; }
+        }
+        if (nearest == null) return BtStatus.Failure;
+
+        // Aim at the platform's nearest edge (underside if below, top if above)
+        float targetY = _fighter.Position.Y < nearest.Y ? nearest.Y + nearest.Height : nearest.Y;
+        var target = new Vector2(nearest.X, targetY);
         var dir = (target - _fighter.Position).Normalized();
         return fist.Launch(dir) ? BtStatus.Success : BtStatus.Failure;
     }

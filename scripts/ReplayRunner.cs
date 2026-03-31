@@ -124,7 +124,7 @@ public partial class ReplayRunner : Node2D
     private struct FistSnap
     {
         public int State; // FistChainState
-        public float X, Y, Ax, Ay, Cl;
+        public float X, Y, Ax, Ay, Cl, Dx, Dy;
         public bool Attached;
     }
 
@@ -315,7 +315,8 @@ public partial class ReplayRunner : Node2D
     private static FistSnap CapFist(Fist f) => new()
     {
         State = (int)f.ChainState, X = f.Position.X, Y = f.Position.Y,
-        Ax = f.AnchorPoint.X, Ay = f.AnchorPoint.Y, Cl = f.ChainLength, Attached = f.IsAttachedToWorld
+        Ax = f.AnchorPoint.X, Ay = f.AnchorPoint.Y, Cl = f.ChainLength,
+        Dx = f.LaunchDirection.X, Dy = f.LaunchDirection.Y, Attached = f.IsAttachedToWorld
     };
 
     // ── Beacon pre-sim ──
@@ -584,7 +585,7 @@ public partial class ReplayRunner : Node2D
     private static void ApplyFistSnap(Fist fist, FistSnap s)
     {
         fist.ForceState((FistChainState)s.State, new Vector2(s.X, s.Y),
-            new Vector2(s.Ax, s.Ay), s.Cl, s.Attached);
+            new Vector2(s.Ax, s.Ay), s.Cl, s.Attached, new Vector2(s.Dx, s.Dy));
     }
 
     private static void ApplyPawnSnap(Pawn p, PawnSnap s)

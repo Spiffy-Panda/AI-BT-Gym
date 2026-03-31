@@ -248,11 +248,9 @@ public static class MapTests
         // (fighters start near hazard positions in HazardStrips config)
         if (config.HazardZones.Count > 0)
         {
-            float hp0 = match.Fighter0.Health;
-            float hp1 = match.Fighter1.Health;
-            float totalHpLost = (100f - hp0) + (100f - hp1);
-            notes["hazards"] = $"total_hp_lost={totalHpLost:F1}";
-            // Don't error — BTs may successfully avoid hazards, which is valid
+            float hazDmg0 = match.HazardDamageTaken[0];
+            float hazDmg1 = match.HazardDamageTaken[1];
+            notes["hazards"] = $"hazard_dmg: F0={hazDmg0:F1} F1={hazDmg1:F1} total={hazDmg0 + hazDmg1:F1}";
         }
 
         // Destructible walls: wall should be damaged or destroyed by end of match

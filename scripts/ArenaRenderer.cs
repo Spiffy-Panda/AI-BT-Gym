@@ -127,8 +127,8 @@ public partial class ArenaRenderer : Node2D
         {
             float x0 = startX + i * step;
             float x1 = startX + (i + 1) * step;
-            float y0 = Arena!.GetCeilingY(x0) + Arena.WallThickness;
-            float y1 = Arena.GetCeilingY(x1) + Arena.WallThickness;
+            float y0 = Arena!.GetCeilingY(x0);
+            float y1 = Arena.GetCeilingY(x1);
             DrawLine(new Vector2(x0, y0), new Vector2(x1, y1), SurfaceColor, thickness);
         }
     }

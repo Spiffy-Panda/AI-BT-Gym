@@ -84,6 +84,9 @@ public record GrappleStatsData
     public float AvgAttachedDurationTicks { get; init; }
     public int CeilingAttaches { get; init; }
     public int WallAttaches { get; init; }
+    public int PlatformAttaches { get; init; }
+    public int FloorAttaches { get; init; }
+    public int MidAirAttaches { get; init; }
 }
 
 public record PhaseData
@@ -141,6 +144,18 @@ public record ReplayCheckpoint
     public List<ReplayFighter> F { get; init; } = [];
     [JsonPropertyName("fists")]
     public List<ReplayFist> Fists { get; init; } = [];
+
+    // ── Mutable feature state (null when no features active) ──
+    [JsonPropertyName("wallHp")]
+    public float[]? WallHp { get; init; }
+    [JsonPropertyName("wallExists")]
+    public bool[]? WallExists { get; init; }
+    [JsonPropertyName("pickupActive")]
+    public bool[]? PickupActive { get; init; }
+    [JsonPropertyName("effLeft")]
+    public float? EffectiveLeft { get; init; }
+    [JsonPropertyName("effRight")]
+    public float? EffectiveRight { get; init; }
 }
 
 public record ReplayFighter
@@ -173,6 +188,10 @@ public record ReplayFist
     public float Ay { get; init; }
     [JsonPropertyName("cl")]
     public float Cl { get; init; }
+    [JsonPropertyName("dx")]
+    public float Dx { get; init; }
+    [JsonPropertyName("dy")]
+    public float Dy { get; init; }
     [JsonPropertyName("a")]
     public bool A { get; init; }
 }

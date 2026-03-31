@@ -129,14 +129,14 @@ public record DestructibleWallConfig
 /// <summary>Arena shrinks in the last portion of the match.</summary>
 public record ArenaShrinkConfig
 {
-    /// <summary>Fraction of match duration when shrinking begins (e.g. 0.8 = last 20%).</summary>
-    public float StartFraction { get; init; } = 0.8f;
+    /// <summary>Fraction of match duration when shrinking begins (e.g. 0.6 = last 40%).</summary>
+    public float StartFraction { get; init; } = 0.6f;
     /// <summary>Pixels to shrink on each side per interval.</summary>
-    public float ShrinkPerStep { get; init; } = 50f;
+    public float ShrinkPerStep { get; init; } = 60f;
     /// <summary>Seconds between each shrink step.</summary>
-    public float StepIntervalSeconds { get; init; } = 5f;
+    public float StepIntervalSeconds { get; init; } = 3f;
     /// <summary>Minimum arena width remaining (stops shrinking).</summary>
-    public float MinWidth { get; init; } = 100f;
+    public float MinWidth { get; init; } = 200f;
 }
 
 // ── Named presets ──

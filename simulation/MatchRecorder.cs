@@ -43,6 +43,9 @@ public class MatchRecorder
     private readonly int[] _attachCount = [0, 0];
     private readonly int[] _ceilingAttaches = [0, 0];
     private readonly int[] _wallAttaches = [0, 0];
+    private readonly int[] _platformAttaches = [0, 0];
+    private readonly int[] _floorAttaches = [0, 0];
+    private readonly int[] _midAirAttaches = [0, 0];
     private readonly int[] _attachedTicks = [0, 0]; // total ticks any fist attached
     private readonly int[] _attachSegments = [0, 0]; // number of attachment segments
 
@@ -105,17 +108,9 @@ public class MatchRecorder
 
             if (isAttached && !wasAttached)
             {
-                // New attachment
                 _attachCount[idx]++;
                 _attachSegments[idx]++;
-
-                // Classify surface: ceiling vs wall
-                var anchor = fist.AnchorPoint;
-                float ceilingY = match.Arena.Bounds.Position.Y;
-                if (Math.Abs(anchor.Y - ceilingY) < 5f)
-                    _ceilingAttaches[idx]++;
-                else
-                    _wallAttaches[idx]++;
+                ClassifyAttach(idx, fist.AnchorPoint, match);
             }
 
             if (isAttached)
@@ -123,6 +118,43 @@ public class MatchRecorder
 
             _prevAttached[idx, fistIdx] = isAttached;
         }
+    }
+
+    private void ClassifyAttach(int idx, Vector2 anchor, Match match)
+    {
+        var arena = match.Arena;
+        var bounds = arena.Bounds;
+        const float tolerance = 10f; // slightly larger than FistRadius (8) to catch surface snaps
+
+        // Floor
+        if (Math.Abs(anchor.Y - bounds.End.Y) <= tolerance)
+        { _floorAttaches[idx]++; return; }
+
+        // Ceiling (flat or shaped)
+        float ceilY = arena.GetCeilingY(anchor.X);
+        if (Math.Abs(anchor.Y - ceilY) <= tolerance)
+        { _ceilingAttaches[idx]++; return; }
+
+        // Side walls
+        if (Math.Abs(anchor.X - bounds.Position.X) <= tolerance ||
+            Math.Abs(anchor.X - bounds.End.X) <= tolerance)
+        { _wallAttaches[idx]++; return; }
+
+        // Platforms
+        foreach (var plat in arena.Config.Platforms)
+        {
+            float platLeft = plat.X - plat.Width / 2f;
+            float platRight = plat.X + plat.Width / 2f;
+            float platTop = plat.Y;
+            float platBottom = plat.Y + plat.Height;
+
+            if (anchor.X >= platLeft - tolerance && anchor.X <= platRight + tolerance &&
+                anchor.Y >= platTop - tolerance && anchor.Y <= platBottom + tolerance)
+            { _platformAttaches[idx]++; return; }
+        }
+
+        // No surface matched — mid-air lock
+        _midAirAttaches[idx]++;
     }
 
     // ── Build battle log from one fighter's perspective ──
@@ -240,7 +272,10 @@ public class MatchRecorder
                 AttachCount = _attachCount[perspectiveIdx],
                 AvgAttachedDurationTicks = avgAttachDur,
                 CeilingAttaches = _ceilingAttaches[perspectiveIdx],
-                WallAttaches = _wallAttaches[perspectiveIdx]
+                WallAttaches = _wallAttaches[perspectiveIdx],
+                PlatformAttaches = _platformAttaches[perspectiveIdx],
+                FloorAttaches = _floorAttaches[perspectiveIdx],
+                MidAirAttaches = _midAirAttaches[perspectiveIdx]
             },
             PhaseBreakdown = phases,
             HitLog = hitLog,
@@ -391,7 +426,7 @@ public class MatchRecorder
         var f0 = match.Fighter0;
         var f1 = match.Fighter1;
 
-        _checkpoints.Add(new ReplayCheckpoint
+        var cp = new ReplayCheckpoint
         {
             T = match.Tick,
             F = [
@@ -403,8 +438,16 @@ public class MatchRecorder
                 CaptureFist(f0.RightFist),
                 CaptureFist(f1.LeftFist),
                 CaptureFist(f1.RightFist)
-            ]
-        });
+            ],
+            // Feature state (only populated when features exist)
+            WallHp = match.DestructibleWallHp.Length > 0 ? (float[])match.DestructibleWallHp.Clone() : null,
+            WallExists = match.DestructibleWallExists.Length > 0 ? (bool[])match.DestructibleWallExists.Clone() : null,
+            PickupActive = match.PickupActive.Length > 0 ? (bool[])match.PickupActive.Clone() : null,
+            EffectiveLeft = match.Arena.Config.Shrink != null ? match.EffectiveLeft : null,
+            EffectiveRight = match.Arena.Config.Shrink != null ? match.EffectiveRight : null,
+        };
+
+        _checkpoints.Add(cp);
     }
 
     private static ReplayFist CaptureFist(Fist fist) => new()
@@ -415,6 +458,8 @@ public class MatchRecorder
         Ax = fist.AnchorPoint.X,
         Ay = fist.AnchorPoint.Y,
         Cl = fist.ChainLength,
+        Dx = fist.LaunchDirection.X,
+        Dy = fist.LaunchDirection.Y,
         A = fist.IsAttachedToWorld
     };
 

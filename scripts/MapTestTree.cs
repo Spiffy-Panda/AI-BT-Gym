@@ -1,6 +1,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // MapTestTree.cs — Adaptive BT that reacts to every arena configuration
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// Architecture: a Parallel node runs two children every tick:
+//   1. AttackLayer — always fires fists when in range (never starved)
+//   2. MovementLayer — picks the best movement based on active map features
+//
+// This ensures feature-specific movement never crowds out attacking.
 
 using System.Collections.Generic;
 using AiBtGym.BehaviorTree;
@@ -16,22 +22,71 @@ public static class MapTestTree
 
     public static List<BtNode> Build() =>
     [
-        Sel(
-            HazardEscape(),       // P1: get off damage zones
-            PickupDetour(),       // P2: grab health when hurt
-            WallBusting(),        // P3: open destructible walls
-            PlatformFighting(),   // P4: claim high ground
-            ShrinkAwareness(),    // P5: stay in shrinking bounds
-            FrictionWallPlay(),   // P6: exploit sticky walls
-            DippedCeilingPlay(),  // P7: grapple via low center ceiling
-            BumperEscape(),       // P8: use bumpers when cornered
-            CoreCombat()          // P9: always-on fighting fallback
+        Par(ParallelPolicy.RequireOne,
+            AttackLayer(),
+            MovementLayer()
         )
     ];
 
     // ═════════════════════════════════════════════════════════════════════
+    //  ATTACK LAYER — runs every tick, independent of movement
+    // ═════════════════════════════════════════════════════════════════════
 
-    /// <summary>If standing on a hazard zone, jump off and run to center.</summary>
+    /// <summary>
+    /// Always-on attack logic. Fires fists at opponent when in range,
+    /// manages grapple state (lock/retract extending fists).
+    /// </summary>
+    private static BtNode AttackLayer() =>
+        Sel("attack",
+            // Close range: punch with available fist
+            Seq(Cond(InRange(220)),
+                Sel(
+                    Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
+                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
+                )
+            ),
+
+            // Mid range: launch fist at opponent (may hit or become grapple anchor)
+            Seq(Cond(OutOfRange(220)), Cond(InRange(350)),
+                Sel(
+                    Seq(Cond(RightReady), Act("launch_right_at_opponent")),
+                    Seq(Cond(LeftReady), Act("launch_left_at_opponent"))
+                )
+            ),
+
+            // Manage extending fists: lock for grapple anchor when far
+            Seq(Cond(OutOfRange(200)), Cond(RightExtending), Cond(RightChainOver(90)), Act("lock_right")),
+            Seq(Cond(OutOfRange(200)), Cond(LeftExtending), Cond(LeftChainOver(90)), Act("lock_left")),
+
+            // While grappling with right, also attack with left
+            Seq(Cond(RightAnchored), Cond(InRange(250)), Cond(LeftReady),
+                Act("launch_left_at_opponent")),
+
+            // Pull toward grapple anchor
+            Seq(Cond(RightAnchored), Cond(RightLocked), Act("retract_right")),
+            Seq(Cond(LeftAnchored), Cond(LeftLocked), Act("retract_left"))
+        );
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  MOVEMENT LAYER — picks best movement each tick
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Movement decision tree. Feature sub-strategies only control WHERE
+    /// the fighter moves, not whether it attacks (attack layer handles that).
+    /// </summary>
+    private static BtNode MovementLayer() =>
+        Sel("movement",
+            HazardEscape(),       // P1: get off damage zones
+            PickupDetour(),       // P2: grab health when hurt
+            PlatformMovement(),   // P3: move toward/onto platforms
+            ShrinkMovement(),     // P4: stay in shrinking bounds
+            CeilingApproach(),    // P5: use low ceiling for grapple approach
+            DefaultMovement()     // P6: walk toward opponent
+        );
+
+    // ── Movement sub-strategies ──
+
     private static BtNode HazardEscape() =>
         Seq("hazard_escape",
             Cond(StandingOnHazard),
@@ -42,7 +97,6 @@ public static class MapTestTree
             )
         );
 
-    /// <summary>Detour to grab pickup when hurt. Wider thresholds to exercise the feature.</summary>
     private static BtNode PickupDetour() =>
         Seq("pickup_detour",
             Cond(HasPickups),
@@ -57,57 +111,30 @@ public static class MapTestTree
             )
         );
 
-    /// <summary>Punch destructible walls open when opponent is far.</summary>
-    private static BtNode WallBusting() =>
-        Seq("wall_busting",
-            Cond(HasWalls),
-            Cond(WallStillStanding(0)),
-            Cond(OutOfRange(250)),
-            Sel(
-                Seq(Cond(RightReady), Act("launch_right_at_opponent")),
-                Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                Act("move_toward_opponent")
-            )
-        );
-
     /// <summary>
-    /// Platform play: walk under the platform, jump up, land on it, hold it.
-    /// Key fix: does NOT grapple (which overshoots to ceiling). Uses jump + air drift.
+    /// Platform movement: walk under the platform, jump up, drift to land.
+    /// Only controls movement — attacks happen via AttackLayer.
     /// </summary>
-    private static BtNode PlatformFighting() =>
-        Seq("platform_play",
+    private static BtNode PlatformMovement() =>
+        Seq("platform_move",
             Cond(HasPlatforms),
             Sel(
-                // Already on platform — hold and attack
-                Seq(
-                    Cond(StandingOnPlatform),
-                    Sel(
-                        Seq(Cond(InRange(250)),
-                            Sel(
-                                Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                                Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                            )
-                        ),
-                        Act("move_toward_opponent")
-                    )
-                ),
+                // On platform — move toward opponent along it (attacks handled by attack layer)
+                Seq(Cond(StandingOnPlatform), Act("move_toward_opponent")),
 
-                // Grounded and near platform — jump up
+                // Grounded near platform — jump up
                 Seq(Cond(Grounded), Cond(PlatformNearby(350)), Act("jump")),
 
-                // Airborne near platform — drift toward its center to land on it
-                Seq(
-                    Cond(Airborne),
-                    Cond(PlatformNearby(200)),
+                // Airborne near platform — drift to land on it
+                Seq(Cond(Airborne), Cond(PlatformNearby(200)),
                     Sel(
                         Seq(Cond("platform_0_x - pos_x > 20"), Act("move_right")),
                         Seq(Cond("pos_x - platform_0_x > 20"), Act("move_left"))
                     )
                 ),
 
-                // Far from platform on ground — walk toward it
-                Seq(
-                    Cond(Grounded),
+                // Walk toward platform
+                Seq(Cond(Grounded),
                     Sel(
                         Seq(Cond("platform_0_x - pos_x > 30"), Act("move_right")),
                         Seq(Cond("pos_x - platform_0_x > 30"), Act("move_left"))
@@ -117,169 +144,47 @@ public static class MapTestTree
         );
 
     /// <summary>
-    /// Shrink awareness: before shrink kicks in, play evasively to stall.
-    /// Once bounds shrink, stay inside and fight aggressively.
+    /// Shrink movement: stay inside effective bounds. No evasion — just
+    /// avoid the walls and move toward opponent. The attack layer handles punching.
     /// </summary>
-    private static BtNode ShrinkAwareness() =>
-        Seq("shrink_awareness",
+    private static BtNode ShrinkMovement() =>
+        Seq("shrink_move",
             Cond(ArenaShrinking),
+            Cond(ArenaLeft.Gt(50)), // bounds have actually shrunk
             Sel(
-                // Bounds have actually shrunk — stay inside
-                Seq(
-                    Cond(ArenaLeft.Gt(50)),
-                    Sel(
-                        Seq(Cond("pos_x - arena_left < 80"), Act("move_right")),
-                        Seq(Cond("arena_right - pos_x < 80"), Act("move_left")),
-                        Seq(Cond(InRange(200)),
-                            Sel(
-                                Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                                Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                            )
-                        ),
-                        Act("move_toward_opponent")
-                    )
-                ),
-
-                // Pre-shrink: play evasively — retreat when close, counter-punch
-                Sel(
-                    Seq(Cond(InRange(120)), Act("move_away_from_opponent")),
-                    Seq(Cond(InRange(250)),
-                        Sel(
-                            Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                            Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                        )
-                    ),
-                    // Stay at mid distance — don't rush in
-                    Seq(Cond(OutOfRange(400)), Act("move_toward_opponent"))
-                )
+                // Too close to effective left wall
+                Seq(Cond("pos_x - arena_left < 80"), Act("move_right")),
+                // Too close to effective right wall
+                Seq(Cond("arena_right - pos_x < 80"), Act("move_left")),
+                // Inside bounds — just approach
+                Act("move_toward_opponent")
             )
         );
 
     /// <summary>
-    /// Friction wall play: proactively grapple to the upper wall for aerial advantage.
-    /// Phase 1: move to the wall. Phase 2: cling and attack while sliding.
+    /// Dipped ceiling approach: when far from opponent on a dipped ceiling map,
+    /// grapple to the low center ceiling for a fast swing approach.
+    /// Only fires from ground in center zone — doesn't loop in the air.
     /// </summary>
-    private static BtNode FrictionWallPlay() =>
-        Sel("friction_wall",
-            // Phase 2: already in friction zone — attack while clinging
-            Seq(
-                Cond(InWallFriction),
-                Sel(
-                    Seq(Cond(InRange(280)),
-                        Sel(
-                            Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                            Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                        )
-                    ),
-                    // Re-grapple upward to stay high in the friction zone
-                    Seq(Cond(RightReady), Act("launch_right_up")),
-                    Seq(Cond(RightExtending), Cond(RightChainOver(60)), Act("lock_right")),
-                    Seq(Cond(RightAnchored), Act("retract_right"))
-                )
-            ),
-
-            // Phase 1: proactively grapple to left wall when we have HP lead.
-            Seq(
-                Cond(HasStickyWalls),
-                Cond("health - opponent_health > 10"),
-                Cond(OutOfRange(200)),  // don't abandon a close fight
-                Cond(Grounded),
-                // Move toward left wall
-                Sel(
-                    Seq(Cond("pos_x > 100"), Act("move_left")),
-                    // Near left wall — jump up into friction zone
-                    Act("jump")
-                )
-            )
-        );
-
-    /// <summary>
-    /// Bumper play: use corners both defensively (escape when cornered) and
-    /// offensively (retreat to corner when losing HP to slingshot back).
-    /// </summary>
-    private static BtNode BumperEscape() =>
-        Sel("bumper_play",
-            // Defensive: cornered with opponent close — jump into bumper to escape
-            Seq(
-                Cond(InRange(180)),
-                Sel(
-                    Seq(Cond("pos_x < 80"), Cond(Grounded), Act("jump")),
-                    Seq(Cond("pos_x < 60"), Act("move_left")),
-                    Seq(Cond("pos_x > 1420"), Cond(Grounded), Act("jump")),
-                    Seq(Cond("pos_x > 1440"), Act("move_right"))
-                )
-            ),
-
-            // Offensive: losing HP on bumper maps — retreat to corner for slingshot
-            Seq(
-                Cond(HasCornerBumpers),
-                Cond("opponent_health - health > 15"),
-                Cond(OutOfRange(150)),
-                Sel(
-                    // Closer to left corner — retreat left
-                    Seq(Cond("pos_x < 750"), Act("move_left")),
-                    // Closer to right corner — retreat right
-                    Act("move_right")
-                )
-            )
-        );
-
-    /// <summary>
-    /// Dipped ceiling play: on maps with a low center ceiling, use overhead grapple
-    /// as a fast approach. The ceiling is lower in center so grapple anchors faster,
-    /// creating a swinging aerial approach.
-    /// </summary>
-    private static BtNode DippedCeilingPlay() =>
-        Seq("ceiling_play",
+    private static BtNode CeilingApproach() =>
+        Seq("ceiling_approach",
             Cond(HasDippedCeiling),
-            Cond(OutOfRange(250)),
+            Cond(OutOfRange(300)),
+            Cond(Grounded),
+            // Must be in the center zone where ceiling is lowest
+            Cond("pos_x > 400"),
+            Cond("pos_x < 1100"),
             Sel(
-                // Grapple upward from center area for fast anchor on low ceiling
-                Seq(Cond("pos_x > 500"), Cond("pos_x < 1000"),
-                    Sel(
-                        Seq(Cond(RightExtending), Cond(RightChainOver(60)), Act("lock_right")),
-                        Seq(Cond(RightAnchored), Cond(RightLocked), Act("retract_right")),
-                        Seq(Cond(RightReady), Act("launch_right_up"))
-                    )
-                ),
-                // Move toward center to get under the low ceiling
-                Seq(Cond("pos_x < 500"), Act("move_right")),
-                Seq(Cond("pos_x > 1000"), Act("move_left"))
+                // Launch upward for ceiling grapple — attack layer handles lock/retract
+                Seq(Cond(RightReady), Act("launch_right_up")),
+                Act("move_toward_opponent")
             )
         );
 
-    /// <summary>
-    /// Core combat fallback: approach, attack in range, grapple when far.
-    /// </summary>
-    private static BtNode CoreCombat() =>
-        Sel("core_combat",
-            // Close: attack
-            Seq(
-                Cond(InRange(200)),
-                Sel(
-                    Seq(Cond(LeftReady), Act("launch_left_at_opponent")),
-                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                )
-            ),
-
-            // Mid: grapple approach
-            Seq(
-                Cond(OutOfRange(200)),
-                Sel(
-                    Seq(Cond(RightExtending), Cond(RightChainOver(90)), Act("lock_right")),
-                    Seq(Cond(RightAnchored), Cond(RightLocked), Act("retract_right")),
-                    Seq(Cond(RightReady), Act("launch_right_at_opponent"))
-                )
-            ),
-
-            // While grappling, attack with left
-            Seq(Cond(RightAnchored), Cond(InRange(250)), Cond(LeftReady),
-                Act("launch_left_at_opponent")),
-
-            // Jump when far
+    /// <summary>Default movement: walk toward opponent, jump when far.</summary>
+    private static BtNode DefaultMovement() =>
+        Sel("default_move",
             Seq(Cond(Grounded), Cond(OutOfRange(300)), Act("jump")),
-
-            // Walk
             Act("move_toward_opponent")
         );
 }

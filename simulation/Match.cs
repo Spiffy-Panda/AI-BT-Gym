@@ -52,6 +52,12 @@ public class Match
     /// <summary>Current effective right boundary (accounts for arena shrink).</summary>
     public float EffectiveRight { get; private set; }
 
+    /// <summary>Cumulative hazard zone damage taken by each fighter (index 0 and 1).</summary>
+    public float[] HazardDamageTaken { get; } = [0f, 0f];
+
+    // Fists that auto-locked on a surface this tick (skip hit checks to prevent wall-press damage)
+    private readonly HashSet<Fist> _autoLockedThisTick = new();
+
     /// <summary>Create a match with deterministic starting positions (legacy).</summary>
     public Match(Arena arena, List<BtNode> tree0, List<BtNode> tree1)
         : this(arena, tree0, tree1, seed: null) { }
@@ -156,6 +162,11 @@ public class Match
         TickFighter(Fighter0);
         TickFighter(Fighter1);
 
+        // Fist-vs-surface collisions (auto-lock on arena walls, ceiling, platforms, destructible walls)
+        _autoLockedThisTick.Clear();
+        TickFistSurfaces(Fighter0);
+        TickFistSurfaces(Fighter1);
+
         // Fist-vs-fist collisions (all four pairs)
         // Skipped when fighters are close ("inside the guard")
         float fighterDist = Fighter0.Position.DistanceTo(Fighter1.Position);
@@ -165,10 +176,6 @@ public class Match
         SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.LeftFist, fighterDist, bodyRadius);
         SimPhysics.CheckFistCollision(Fighter0.RightFist, Fighter1.RightFist, fighterDist, bodyRadius);
 
-        // Fist-vs-destructible-wall collisions
-        CheckFistVsWalls(Fighter0);
-        CheckFistVsWalls(Fighter1);
-
         // Fist-vs-body hits (notify recorder on hit)
         CheckAndRecordHit(Fighter0.LeftFist, Fighter1, 0, "left");
         CheckAndRecordHit(Fighter0.RightFist, Fighter1, 0, "right");
@@ -176,8 +183,8 @@ public class Match
         CheckAndRecordHit(Fighter1.RightFist, Fighter0, 1, "right");
 
         // Arena features: hazards, pickups, shrink
-        TickHazardZones(Fighter0);
-        TickHazardZones(Fighter1);
+        TickHazardZones(Fighter0, 0);
+        TickHazardZones(Fighter1, 1);
         TickPickups(Fighter0);
         TickPickups(Fighter1);
         TickArenaShrink();
@@ -191,6 +198,10 @@ public class Match
 
     private void CheckAndRecordHit(Fist fist, Fighter target, int attackerIdx, string hand)
     {
+        // Fists that just auto-locked on a surface this tick can't also hit fighters
+        if (_autoLockedThisTick.Contains(fist))
+            return;
+
         // Fists can't hit through standing destructible walls
         if (IsBlockedByWall(fist.Position, target.Position))
             return;
@@ -285,7 +296,7 @@ public class Match
         f.RightFist.Tick(SimPhysics.FixedDt, f.Position);
     }
 
-    // ── Destructible walls ──
+    // ── Destructible walls: body collision ──
 
     private void ClampToDestructibleWalls(ref Vector2 pos, ref Vector2 vel, float radius)
     {
@@ -300,12 +311,10 @@ public class Match
             float wallTop = wall.BottomY - wall.Height;
             float wallBottom = wall.BottomY;
 
-            // Check if fighter body overlaps the wall
             if (pos.Y + radius > wallTop && pos.Y - radius < wallBottom)
             {
                 if (pos.X + radius > wallLeft && pos.X - radius < wallRight)
                 {
-                    // Push out to nearest side
                     float pushLeft = wallLeft - radius - pos.X;
                     float pushRight = wallRight + radius - pos.X;
 
@@ -324,16 +333,132 @@ public class Match
         }
     }
 
-    private void CheckFistVsWalls(Fighter f)
+    // ── Fist-vs-surface collision system ──
+    // Extending fists auto-lock when they hit: arena walls/ceiling, platforms,
+    // destructible walls (damage + attach), shaped ceiling, shrink bounds.
+
+    private void TickFistSurfaces(Fighter f)
     {
-        CheckFistVsWall(f.LeftFist);
-        CheckFistVsWall(f.RightFist);
+        CheckFistSurface(f, f.LeftFist);
+        CheckFistSurface(f, f.RightFist);
     }
 
-    private void CheckFistVsWall(Fist fist)
+    private void CheckFistSurface(Fighter owner, Fist fist)
     {
         if (fist.ChainState != FistChainState.Extending) return;
 
+        var pos = fist.Position;
+        float r = fist.FistRadius;
+
+        // 1. Arena walls and ceiling
+        if (CheckFistVsArenaWalls(fist, pos, r)) return;
+
+        // 2. Shaped ceiling
+        if (CheckFistVsCeiling(fist, pos, r)) return;
+
+        // 3. Platforms (attach to surface)
+        if (CheckFistVsPlatforms(fist, pos, r)) return;
+
+        // 4. Destructible walls (damage + attach or retract)
+        if (CheckFistVsDestructibleWalls(fist, pos, r)) return;
+
+        // 5. Shrink bounds
+        if (CheckFistVsShrinkBounds(fist, pos, r)) return;
+    }
+
+    private bool CheckFistVsArenaWalls(Fist fist, Vector2 pos, float r)
+    {
+        var b = Arena.Bounds;
+
+        // Left wall
+        if (pos.X - r <= b.Position.X)
+        {
+            fist.Position = new Vector2(b.Position.X + r, pos.Y);
+            fist.AnchorPoint = fist.Position;
+            AutoLockFist(fist);
+            return true;
+        }
+        // Right wall
+        if (pos.X + r >= b.End.X)
+        {
+            fist.Position = new Vector2(b.End.X - r, pos.Y);
+            fist.AnchorPoint = fist.Position;
+            AutoLockFist(fist);
+            return true;
+        }
+        // Floor
+        if (pos.Y + r >= b.End.Y)
+        {
+            fist.Position = new Vector2(pos.X, b.End.Y - r);
+            fist.AnchorPoint = fist.Position;
+            AutoLockFist(fist);
+            return true;
+        }
+        // Flat ceiling (only when no shaped ceiling — shaped handled separately)
+        if (Arena.Config.Ceiling == null && pos.Y - r <= b.Position.Y)
+        {
+            fist.Position = new Vector2(pos.X, b.Position.Y + r);
+            fist.AnchorPoint = fist.Position;
+            AutoLockFist(fist);
+            return true;
+        }
+        return false;
+    }
+
+    private bool CheckFistVsCeiling(Fist fist, Vector2 pos, float r)
+    {
+        if (Arena.Config.Ceiling == null) return false;
+
+        float ceilY = Arena.GetCeilingY(pos.X);
+        if (pos.Y - r <= ceilY)
+        {
+            fist.Position = new Vector2(pos.X, ceilY + r);
+            fist.AnchorPoint = fist.Position;
+            AutoLockFist(fist);
+            return true;
+        }
+        return false;
+    }
+
+    private bool CheckFistVsPlatforms(Fist fist, Vector2 pos, float r)
+    {
+        foreach (var plat in Arena.Config.Platforms)
+        {
+            float platLeft = plat.X - plat.Width / 2f;
+            float platRight = plat.X + plat.Width / 2f;
+            float platTop = plat.Y;
+            float platBottom = plat.Y + plat.Height;
+
+            // Check AABB overlap
+            if (pos.X + r > platLeft && pos.X - r < platRight &&
+                pos.Y + r > platTop && pos.Y - r < platBottom)
+            {
+                // Snap to nearest surface
+                float dTop = Mathf.Abs(pos.Y - r - platTop);
+                float dBot = Mathf.Abs(pos.Y + r - platBottom);
+                float dLeft = Mathf.Abs(pos.X + r - platLeft);
+                float dRight = Mathf.Abs(pos.X - r - platRight);
+                float min = Mathf.Min(Mathf.Min(dTop, dBot), Mathf.Min(dLeft, dRight));
+
+                if (min == dBot)       // attach to underside
+                    fist.Position = new Vector2(pos.X, platBottom + r);
+                else if (min == dTop)  // attach to top
+                    fist.Position = new Vector2(pos.X, platTop - r);
+                else if (min == dLeft) // attach to left side
+                    fist.Position = new Vector2(platLeft - r, pos.Y);
+                else                   // attach to right side
+                    fist.Position = new Vector2(platRight + r, pos.Y);
+
+                fist.AnchorPoint = fist.Position;
+                AutoLockFist(fist);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool CheckFistVsDestructibleWalls(Fist fist, Vector2 pos, float r)
+    {
         var walls = Arena.Config.DestructibleWalls;
         for (int i = 0; i < walls.Count; i++)
         {
@@ -345,33 +470,87 @@ public class Match
             float wallTop = wall.BottomY - wall.Height;
             float wallBottom = wall.BottomY;
 
-            // Check fist overlap with wall
-            if (fist.Position.X + fist.FistRadius > wallLeft &&
-                fist.Position.X - fist.FistRadius < wallRight &&
-                fist.Position.Y + fist.FistRadius > wallTop &&
-                fist.Position.Y - fist.FistRadius < wallBottom)
+            if (pos.X + r > wallLeft && pos.X - r < wallRight &&
+                pos.Y + r > wallTop && pos.Y - r < wallBottom)
             {
+                // Always deal damage and retract — destructible walls are punched, not grappled
                 DestructibleWallHp[i] -= wall.DamagePerHit;
                 if (DestructibleWallHp[i] <= 0)
                 {
                     DestructibleWallHp[i] = 0;
                     DestructibleWallExists[i] = false;
+                    ApplyWallBreakKnockback(wall);
                 }
                 fist.ForceRetract();
-                return;
+                return true;
             }
+        }
+        return false;
+    }
+
+    private bool CheckFistVsShrinkBounds(Fist fist, Vector2 pos, float r)
+    {
+        if (Arena.Config.Shrink == null) return false;
+
+        if (pos.X - r <= EffectiveLeft)
+        {
+            fist.ForceRetract();
+            return true;
+        }
+        if (pos.X + r >= EffectiveRight)
+        {
+            fist.ForceRetract();
+            return true;
+        }
+        return false;
+    }
+
+    private void ApplyWallBreakKnockback(DestructibleWallConfig wall)
+    {
+        float knockRadius = wall.Height;
+        float knockForce = 300f;
+
+        foreach (var f in new[] { Fighter0, Fighter1 })
+        {
+            float dx = f.Position.X - wall.X;
+            float dy = f.Position.Y - (wall.BottomY - wall.Height / 2f);
+            float dist = Mathf.Sqrt(dx * dx + dy * dy);
+            if (dist < knockRadius && dist > 1f)
+            {
+                var dir = new Vector2(dx, dy) / dist;
+                f.Velocity += dir * knockForce;
+            }
+        }
+    }
+
+    /// <summary>Auto-lock an extending fist onto a surface it just hit.</summary>
+    private void AutoLockFist(Fist fist)
+    {
+        fist.AnchorPoint = fist.Position;
+        if (fist.Lock())
+        {
+            _autoLockedThisTick.Add(fist);
+        }
+        else
+        {
+            fist.ForceRetract();
         }
     }
 
     // ── Hazard zones ──
 
-    private void TickHazardZones(Fighter f)
+    private void TickHazardZones(Fighter f, int fighterIdx)
     {
-        // Only apply hazard damage when on the arena floor, not elevated on platforms
         if (!Arena.IsOnGround(f.Position, f.BodyRadius)) return;
         float dmgRate = Arena.GetHazardDamageRate(f.Position);
         if (dmgRate > 0)
-            f.ApplyDamage(dmgRate * SimPhysics.FixedDt);
+        {
+            float dmg = dmgRate * SimPhysics.FixedDt;
+            f.ApplyDamage(dmg);
+            HazardDamageTaken[fighterIdx] += dmg;
+            if (Tick % 30 == 0)
+                f.Velocity += new Vector2(0, -40f);
+        }
     }
 
     // ── Pickups ──
@@ -402,6 +581,9 @@ public class Match
                 if (healAmount > 0)
                     f.ApplyDamage(-healAmount); // negative damage = heal
 
+                // Pickup feedback: small upward burst (visible jump-like effect)
+                f.Velocity += new Vector2(0, -80f);
+
                 PickupActive[i] = false;
                 PickupRespawnTimer[i] = (int)(pickup.RespawnSeconds * 60f); // convert to ticks
             }
@@ -431,54 +613,61 @@ public class Match
         EffectiveRight = Mathf.Max(Arena.Bounds.End.X - totalShrink, boundsCenter + halfMin);
     }
 
-    /// <summary>Nudge a spawn position out of hazard zones and destructible walls.</summary>
+    /// <summary>Nudge a spawn position out of hazard zones and destructible walls. Loops to handle cascading overlaps.</summary>
     private static Vector2 NudgeOutOfHazard(Vector2 pos, Arena arena)
     {
-        foreach (var hz in arena.Config.HazardZones)
+        // Loop up to 3 times in case nudging out of one zone lands in another
+        for (int pass = 0; pass < 3; pass++)
         {
-            float hzLeft = hz.X;
-            float hzRight = hz.X + hz.Width;
+            bool nudged = false;
 
-            if (pos.X >= hzLeft && pos.X <= hzRight)
+            foreach (var hz in arena.Config.HazardZones)
             {
-                // Move to whichever edge is closer
-                float distToLeft = pos.X - hzLeft;
-                float distToRight = hzRight - pos.X;
+                float hzLeft = hz.X;
+                float hzRight = hz.X + hz.Width;
 
-                if (distToLeft <= distToRight)
-                    pos = new Vector2(hzLeft - 20f, pos.Y);   // 20px clearance
-                else
-                    pos = new Vector2(hzRight + 20f, pos.Y);
+                if (pos.X >= hzLeft && pos.X <= hzRight)
+                {
+                    float distToLeft = pos.X - hzLeft;
+                    float distToRight = hzRight - pos.X;
 
-                // Clamp back into arena bounds
-                pos = new Vector2(
-                    Mathf.Clamp(pos.X, arena.Bounds.Position.X + 20f, arena.Bounds.End.X - 20f),
-                    pos.Y);
-                break;
+                    if (distToLeft <= distToRight)
+                        pos = new Vector2(hzLeft - 20f, pos.Y);
+                    else
+                        pos = new Vector2(hzRight + 20f, pos.Y);
+
+                    pos = new Vector2(
+                        Mathf.Clamp(pos.X, arena.Bounds.Position.X + 20f, arena.Bounds.End.X - 20f),
+                        pos.Y);
+                    nudged = true;
+                    break; // restart the pass
+                }
             }
-        }
 
-        // Also nudge away from destructible walls
-        foreach (var wall in arena.Config.DestructibleWalls)
-        {
-            float wallLeft = wall.X - wall.Thickness / 2f - 20f;
-            float wallRight = wall.X + wall.Thickness / 2f + 20f;
-
-            if (pos.X >= wallLeft && pos.X <= wallRight)
+            foreach (var wall in arena.Config.DestructibleWalls)
             {
-                float distToLeft = pos.X - wallLeft;
-                float distToRight = wallRight - pos.X;
+                float wallLeft = wall.X - wall.Thickness / 2f - 20f;
+                float wallRight = wall.X + wall.Thickness / 2f + 20f;
 
-                if (distToLeft <= distToRight)
-                    pos = new Vector2(wallLeft - 5f, pos.Y);
-                else
-                    pos = new Vector2(wallRight + 5f, pos.Y);
+                if (pos.X >= wallLeft && pos.X <= wallRight)
+                {
+                    float distToLeft = pos.X - wallLeft;
+                    float distToRight = wallRight - pos.X;
 
-                pos = new Vector2(
-                    Mathf.Clamp(pos.X, arena.Bounds.Position.X + 20f, arena.Bounds.End.X - 20f),
-                    pos.Y);
-                break;
+                    if (distToLeft <= distToRight)
+                        pos = new Vector2(wallLeft - 5f, pos.Y);
+                    else
+                        pos = new Vector2(wallRight + 5f, pos.Y);
+
+                    pos = new Vector2(
+                        Mathf.Clamp(pos.X, arena.Bounds.Position.X + 20f, arena.Bounds.End.X - 20f),
+                        pos.Y);
+                    nudged = true;
+                    break;
+                }
             }
+
+            if (!nudged) break; // no overlaps found, done
         }
 
         return pos;
