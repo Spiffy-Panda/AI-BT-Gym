@@ -15,7 +15,7 @@ internal static class ReplayViewerHtml
   body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; align-items: center; padding: 16px; }
   h1 { color: var(--accent); font-size: 18px; margin-bottom: 4px; }
   .subtitle { color: var(--dim); font-size: 13px; margin-bottom: 12px; }
-  canvas { border: 1px solid var(--border); border-radius: 4px; background: #0a0e14; }
+  canvas { border: 1px solid var(--border); border-radius: 4px; background: #0a0e14; max-width: 100%; }
   .controls { display: flex; gap: 8px; align-items: center; margin-top: 10px; width: 100%; max-width: 1200px; }
   button { background: var(--accent); color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600; }
   button:hover { opacity: 0.9; }
@@ -34,7 +34,7 @@ internal static class ReplayViewerHtml
   .breadcrumb a:hover { text-decoration: underline; }
   .breadcrumb .sep { margin: 0 6px; color: var(--border); }
   .breadcrumb .current { color: var(--text); font-weight: 600; }
-  .copy-path { margin-left: 10px; background: var(--card); border: 1px solid var(--border); color: var(--dim); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: monospace; white-space: nowrap; }
+  .copy-path { margin-left: 8px; background: var(--card); border: 1px solid var(--border); color: var(--dim); padding: 2px 7px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
   .copy-path:hover { color: var(--accent); border-color: var(--accent); }
   .match-id { display: inline-block; margin-top: 4px; padding: 3px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; font-family: 'Consolas', 'Fira Code', monospace; font-size: 13px; color: var(--accent); user-select: all; -webkit-user-select: all; cursor: text; letter-spacing: 0.3px; }
 </style>
@@ -50,7 +50,7 @@ internal static class ReplayViewerHtml
   <button class="speed-btn active" onclick="setSpeed(1)">1x</button>
   <button class="speed-btn" onclick="setSpeed(2)">2x</button>
   <button class="speed-btn" onclick="setSpeed(4)">4x</button>
-  <button id="launchGodotBtn" style="background:#3fb950;margin-left:8px" onclick="launchInGodot()">Launch in Godot</button>
+  <button id="launchGodotBtn" class="speed-btn" style="margin-left:8px;color:var(--accent);border-color:var(--accent)" onclick="launchInGodot()">Launch in Godot</button>
   <input type="range" id="scrubber" min="0" max="100" value="0" oninput="scrub(this.value)">
   <span class="info" id="tickInfo">0 / 0</span>
 </div>
@@ -156,11 +156,11 @@ async function load() {
     const bc = document.getElementById('breadcrumb');
     const tq = tournament !== 'default' ? `?tournament=${tournament}` : '';
     bc.innerHTML = `<a href="/${tq}">Tournaments</a><span class="sep">&gt;</span>`
-      + `<a href="/${tq}#gen=${gen}">Gen_${gen}</a><span class="sep">&gt;</span>`
-      + `<a href="/${tq}#gen=${gen}&fighter=${fighter}">${battle.fighter}</a><span class="sep">&gt;</span>`
+      + `<a href="/${tq}#view=gen&gen=${gen}">Gen_${gen}</a><span class="sep">&gt;</span>`
+      + `<a href="/${tq}#view=fighter&gen=${gen}&fighter=${fighter}&fname=${encodeURIComponent(battle.fighter)}">${battle.fighter}</a><span class="sep">&gt;</span>`
       + `<span>vs ${battle.opponent}</span><span class="sep">&gt;</span>`
       + `<span class="current">Replay</span>`
-      + `<button class="copy-path" title="${relPath}" onclick="(() => { navigator.clipboard.writeText('${relPath}'); this.textContent='copied!'; setTimeout(() => this.textContent='${relPath}', 1200); })()">${relPath}</button>`;
+      + `<button class="copy-path" title="${relPath}" onclick="navigator.clipboard.writeText('${relPath}').then(() => { this.textContent='✓'; setTimeout(() => this.textContent='⎘', 1200); })">⎘</button>`;
     // Build selectable match ID label
     const tAbbrev = tournament === 'beacon_brawl' ? 'bb' : tournament === 'default' ? 'df' : tournament.replace(/[^a-z0-9]/gi, '').substring(0, 6);
     const colorOf = s => (s || '').toLowerCase().split(/[_ ]/)[0];
@@ -183,7 +183,8 @@ async function load() {
     // Scale arena to fit canvas (max 1500px wide)
     const arenaW = replay.arena.width;
     const arenaH = replay.arena.height;
-    const viewScale = Math.min(1500 / arenaW, 600 / arenaH, 1);
+    const maxW = Math.min(1500, document.body.clientWidth - 32);
+    const viewScale = Math.min(maxW / arenaW, 600 / arenaH, 1);
     canvas.width = Math.round(arenaW * viewScale);
     canvas.height = Math.round(arenaH * viewScale);
     canvas.dataset.viewScale = viewScale;
@@ -664,19 +665,22 @@ async function launchInGodot() {
     const result = await res.json();
     if (res.ok) {
       btn.textContent = 'Launched!';
-      btn.style.background = '#3fb950';
-      setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; }, 3000);
+      btn.style.background = 'var(--green)';
+      btn.style.color = '#fff';
+      setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = ''; btn.style.color = 'var(--accent)'; }, 3000);
     } else {
       btn.textContent = 'Error';
-      btn.style.background = '#f85149';
+      btn.style.background = 'var(--red)';
+      btn.style.color = '#fff';
       console.error(result.error);
-      setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = '#3fb950'; }, 3000);
+      setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = ''; btn.style.color = 'var(--accent)'; }, 3000);
     }
   } catch (e) {
     btn.textContent = 'Failed';
-    btn.style.background = '#f85149';
+    btn.style.background = 'var(--red)';
+    btn.style.color = '#fff';
     console.error(e);
-    setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = '#3fb950'; }, 3000);
+    setTimeout(() => { btn.textContent = 'Launch in Godot'; btn.disabled = false; btn.style.background = ''; btn.style.color = 'var(--accent)'; }, 3000);
   }
 }
 
@@ -713,6 +717,13 @@ function animate(now) {
   draw();
   if (playing) requestAnimationFrame(animate);
 }
+
+document.addEventListener('keydown', e => {
+  if (!data) return;
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); playing = false; document.getElementById('playBtn').textContent = 'Play'; currentTick = Math.min(currentTick + 1, maxTick); draw(); }
+  else if (e.code === 'ArrowLeft') { e.preventDefault(); playing = false; document.getElementById('playBtn').textContent = 'Play'; currentTick = Math.max(currentTick - 1, 0); draw(); }
+});
 
 load();
 </script>

@@ -42,17 +42,17 @@ internal static class TestPageHtml
 </style>
 </head>
 <body>
-<div class="nav"><a href="/">Tournaments</a> | <strong>Tests</strong> | <a href="/screenshots">Screenshots</a></div>
+<div class="nav"><a href="/">Tournaments</a> | <a href="/bt-compare">BT Compare</a> | <strong>Tests</strong> | <a href="/screenshots">Screenshots</a></div>
 <div class="header">
   <div><h1>Tests</h1><p class="subtitle">Movement tests with visual replay + Map self-play tests with Godot replay</p></div>
   <div style="display:flex;align-items:center"><button id="runBtn" onclick="runTests()">Run All Tests</button><span id="statusText" class="status"></span></div>
 </div>
 <h2 style="color:var(--accent);margin:16px 0 8px">Movement Tests</h2>
-<div id="results"></div>
+<div id="results"><p style="color:var(--dim);font-size:13px;padding:8px 0">Click "Run All Tests" to run physics and behavior tests.</p></div>
 <h2 style="color:var(--accent);margin:16px 0 8px">Map Self-Play Tests</h2>
-<div id="mapResults"></div>
+<div id="mapResults"><p style="color:var(--dim);font-size:13px;padding:8px 0">Tests will validate each arena feature map with a self-play fighter.</p></div>
 <h2 style="color:var(--accent);margin:16px 0 8px">Beacon Brawl Map Tests (TestTeam Self-Play)</h2>
-<div id="bbResults"></div>
+<div id="bbResults"><p style="color:var(--dim);font-size:13px;padding:8px 0">Tests will validate Beacon Brawl maps with the test team.</p></div>
 
 <script>
 let testData = null;

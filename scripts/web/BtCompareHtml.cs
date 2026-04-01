@@ -19,11 +19,11 @@ internal static class BtCompareHtml
   h1 { font-size: 24px; font-weight: 600; }
   .subtitle { color: var(--dim); font-size: 13px; margin-top: 2px; }
   .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 400px; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-height: 400px; min-width: 0; overflow: hidden; }
   .panel-header { margin-bottom: 12px; }
   .panel-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
-  .selectors { display: flex; gap: 8px; margin-bottom: 12px; }
-  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; flex: 1; cursor: pointer; }
+  .selectors { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; flex: 1; min-width: 0; cursor: pointer; }
   select:focus { outline: none; border-color: var(--accent); }
   .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 8px 10px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-size: 12px; }
   .stat { color: var(--dim); }
@@ -31,7 +31,7 @@ internal static class BtCompareHtml
   .tree-actions { display: flex; gap: 6px; margin-bottom: 10px; }
   .tree-actions button { background: var(--bg); color: var(--dim); border: 1px solid var(--border); border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
   .tree-actions button:hover { color: var(--text); border-color: var(--accent); }
-  .tree-container { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.6; }
+  .tree-container { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; }
   .bt-node { padding: 1px 0; }
   .bt-children { padding-left: 20px; border-left: 1px solid var(--border); margin-left: 8px; }
   .bt-children.collapsed { display: none; }

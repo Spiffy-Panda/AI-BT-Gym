@@ -57,7 +57,7 @@ internal static class DashboardHtml
   .breadcrumb a:hover { text-decoration: underline; }
   .breadcrumb .sep { margin: 0 6px; color: var(--border); }
   .breadcrumb .current { color: var(--text); font-weight: 600; }
-  .copy-path { margin-left: 10px; background: var(--card); border: 1px solid var(--border); color: var(--dim); padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; font-family: monospace; white-space: nowrap; }
+  .copy-path { margin-left: 8px; background: var(--card); border: 1px solid var(--border); color: var(--dim); padding: 2px 7px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; flex-shrink: 0; }
   .copy-path:hover { color: var(--accent); border-color: var(--accent); }
 </style>
 </head>
@@ -151,11 +151,11 @@ function getRelativePath() {
 function copyPath(ev) {
   const p = getRelativePath();
   if (!p) return;
-  navigator.clipboard.writeText(p);
   const btn = ev.target;
-  const orig = btn.textContent;
-  btn.textContent = 'copied!';
-  setTimeout(() => btn.textContent = orig, 1200);
+  navigator.clipboard.writeText(p).then(() => {
+    btn.textContent = '✓';
+    setTimeout(() => btn.textContent = '⎘', 1200);
+  });
 }
 
 function renderBreadcrumb() {
@@ -163,7 +163,7 @@ function renderBreadcrumb() {
   const crumbs = [{label: 'Tournaments', action: 'showHome()'}];
 
   if (nav.view !== 'home') {
-    const genLabel = `Gen_${nav.gen}` + (nav.genTimestamp ? `_${fmtTimestamp(nav.genTimestamp)}` : '');
+    const genLabel = `Generation ${nav.gen}`;
     crumbs.push({label: genLabel, action: `showGeneration(${nav.gen})`});
   }
   if (nav.view === 'fighter' || nav.view === 'battle') {
@@ -174,7 +174,7 @@ function renderBreadcrumb() {
   }
 
   const path = getRelativePath();
-  const copyBtn = path ? `<button class="copy-path" onclick="copyPath(event)" title="${path}">${path}</button>` : '';
+  const copyBtn = path ? `<button class="copy-path" onclick="copyPath(event)" title="${path}">⎘</button>` : '';
 
   el.innerHTML = crumbs.map((c, i) => {
     const isLast = i === crumbs.length - 1;
@@ -207,7 +207,7 @@ async function showHome(fromPop) {
 
   el.innerHTML = controls + gens.map(g => `
     <div class="card clickable" onclick="showGeneration(${g.generation})">
-      <h2>Gen_${g.generation}_${fmtTimestamp(g.timestamp)}</h2>
+      <h2>Generation ${g.generation} <span style="color:var(--dim);font-size:12px;font-weight:400">${fmtTimestamp(g.timestamp)}</span></h2>
       <div style="margin-bottom:8px">
         <span class="metric"><span>Fighters:</span> ${g.fighter_count}</span>
         <span class="metric"><span>Matches:</span> ${g.total_matches}</span>
@@ -255,6 +255,7 @@ async function showGeneration(gen, fromPop) {
   renderBreadcrumb();
 
   const fighters = await api(`/generations/${gen}/fighters`);
+  fighters.sort((a, b) => b.elo - a.elo);
   const el = document.getElementById('content');
   el.innerHTML = fighters.map(f => `
     <div class="card clickable" onclick="showFighter(${gen}, '${f.fighter_id}', '${f.name}')">
@@ -320,7 +321,7 @@ async function showFighter(gen, fighterId, fighterName, fromPop) {
             </div>
             <div style="display:flex;align-items:center;gap:8px">
               <a href="/replay?gen=${gen}&fighter=${fighterId}&match=${b.match_id}${currentTournament !== 'default' ? '&tournament=' + currentTournament : ''}" target="_blank" onclick="event.stopPropagation()" style="background:var(--accent);color:#fff;padding:2px 10px;border-radius:4px;text-decoration:none;font-size:12px">Watch</a>
-              <span class="${b.result}" style="font-weight:700">${b.result.toUpperCase()}</span>
+              <span class="${b.result}" style="font-weight:700">${b.result==='win'?'✓ WIN':b.result==='loss'?'✗ LOSS':'— DRAW'}</span>
             </div>
           </div>
         `).join('')}
@@ -461,7 +462,7 @@ function showBattle(b, fighterId) {
       <div class="hit-timeline">
         ${b.hit_log.map(h => `
           <div class="hit-row">
-            <span><span class="${h.attacker==='fighter'?'win':'loss'}" style="font-weight:600">${h.attacker}</span> ${h.hand} fist</span>
+            <span><span class="${h.attacker==='fighter'?'win':'loss'}" style="font-weight:600">${h.attacker==='fighter'?nav.fighterName:b.opponent}</span> ${h.hand} fist</span>
             <span style="color:var(--dim)">tick ${h.tick} — ${h.damage} dmg</span>
           </div>
         `).join('')}
