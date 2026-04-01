@@ -171,6 +171,7 @@ function selectScreenshot(idx) {
   stateHtml += '<h3>Meta</h3>';
   stateHtml += `<div class="kv"><span class="k">Tick</span><span class="v">${st.tick} / ${st.total_ticks} (${st.time_seconds?.toFixed(1)}s)</span></div>`;
   stateHtml += `<div class="kv"><span class="k">Over</span><span class="v">${st.is_over ? 'Yes — Winner: ' + st.winner : 'No'}</span></div>`;
+  if (st.build) stateHtml += `<div class="kv"><span class="k">Build</span><span class="v" style="color:var(--dim)">${st.build}</span></div>`;
 
   detail.innerHTML = `
     <div class="detail-header">

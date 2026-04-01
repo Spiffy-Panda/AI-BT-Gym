@@ -34,6 +34,7 @@ public partial class TournamentRunner : Node
     private List<TestResult>? _lastTestResults;
     private List<MapTests.MapTestResult>? _lastMapTestResults;
     private List<BeaconMapTests.BeaconMapTestResult>? _lastBbMapTestResults;
+    private DateTime? _testsRanAt;
     private string _mapTestDir = "";
     private string _bbMapTestDir = "";
 
@@ -132,6 +133,8 @@ public partial class TournamentRunner : Node
                 await LaunchReplay(req, res);
             else if (path == "/api/tests/run" && method == "POST")
                 await RunTests(res);
+            else if (path == "/api/tests/status" && method == "GET")
+                await ServeJson(res, new { ran_at = _testsRanAt?.ToString("o") });
             else if (path == "/api/tests/results" && method == "GET")
                 await ServeJson(res, _lastTestResults ?? new List<TestResult>());
             else if (path == "/api/tests/map-results" && method == "GET")
@@ -600,6 +603,7 @@ public partial class TournamentRunner : Node
         _lastMapTestResults = MapTests.RunAll();
         _lastBbMapTestResults = BeaconMapTests.RunAll();
         stopwatch.Stop();
+        _testsRanAt = DateTime.UtcNow;
 
         int passed = _lastTestResults.Count(r => r.Passed);
         int failed = _lastTestResults.Count(r => !r.Passed);

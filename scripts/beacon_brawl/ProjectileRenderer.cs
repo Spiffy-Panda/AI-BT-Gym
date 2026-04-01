@@ -9,6 +9,7 @@
 // Rifle shots: instant flash line drawn from ReplayRifleShot segments,
 // fading over a short duration.
 
+using System;
 using System.Collections.Generic;
 using Godot;
 using AiBtGym.Simulation.BeaconBrawl;
@@ -91,13 +92,14 @@ public partial class ProjectileRenderer : Node2D
     {
         int currentTick = Match!.Tick;
 
-        // Remove expired flashes
-        _rifleFlashes.RemoveAll(f => currentTick - f.tick > RifleFlashDuration);
+        // Remove expired flashes (use Abs so backward scrubbing also expires them)
+        _rifleFlashes.RemoveAll(f => Math.Abs(currentTick - f.tick) > RifleFlashDuration);
 
         foreach (var (tick, segments, team) in _rifleFlashes)
         {
-            float age = currentTick - tick;
-            float alpha = 1f - age / RifleFlashDuration;
+            int age = currentTick - tick;
+            if (age < 0) continue; // shot hasn't happened yet at this tick
+            float alpha = 1f - (float)age / RifleFlashDuration;
             if (alpha <= 0) continue;
 
             Color teamColor = team == 0 ? TeamAColor : TeamBColor;

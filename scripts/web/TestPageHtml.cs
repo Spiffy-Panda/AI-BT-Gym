@@ -39,6 +39,14 @@ internal static class TestPageHtml
   .metric span { color: var(--dim); }
   .nav { margin-bottom: 12px; font-size: 13px; }
   .nav a { color: var(--accent); text-decoration: none; } .nav a:hover { text-decoration: underline; }
+  .section { margin-bottom: 8px; }
+  .section-header { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; padding: 8px 0; }
+  .section-header h2 { color: var(--accent); margin: 0; font-size: 18px; }
+  .section-header .arrow { color: var(--dim); font-size: 14px; transition: transform 0.15s; }
+  .section-header .arrow.open { transform: rotate(90deg); }
+  .section-header .section-badge { font-size: 12px; color: var(--dim); }
+  .section-body { overflow: hidden; }
+  .section-body.collapsed { display: none; }
 </style>
 </head>
 <body>
@@ -47,18 +55,78 @@ internal static class TestPageHtml
   <div><h1>Tests</h1><p class="subtitle">Movement tests with visual replay + Map self-play tests with Godot replay</p></div>
   <div style="display:flex;align-items:center"><button id="runBtn" onclick="runTests()">Run All Tests</button><span id="statusText" class="status"></span></div>
 </div>
-<h2 style="color:var(--accent);margin:16px 0 8px">Movement Tests</h2>
-<div id="results"><p style="color:var(--dim);font-size:13px;padding:8px 0">Click "Run All Tests" to run physics and behavior tests.</p></div>
-<h2 style="color:var(--accent);margin:16px 0 8px">Map Self-Play Tests</h2>
-<div id="mapResults"><p style="color:var(--dim);font-size:13px;padding:8px 0">Tests will validate each arena feature map with a self-play fighter.</p></div>
-<h2 style="color:var(--accent);margin:16px 0 8px">Beacon Brawl Map Tests (TestTeam Self-Play)</h2>
-<div id="bbResults"><p style="color:var(--dim);font-size:13px;padding:8px 0">Tests will validate Beacon Brawl maps with the test team.</p></div>
+
+<div class="section">
+  <div class="section-header" onclick="toggleSection('bb')">
+    <span class="arrow open" id="arrow-bb">&#9654;</span>
+    <h2>Beacon Brawl Map Tests (TestTeam Self-Play)</h2>
+    <span class="section-badge" id="badge-bb"></span>
+  </div>
+  <div class="section-body" id="body-bb">
+    <div id="bbResults"><p style="color:var(--dim);font-size:13px;padding:8px 0">No cached data. Click the button above to run tests.</p></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header" onclick="toggleSection('map')">
+    <span class="arrow" id="arrow-map">&#9654;</span>
+    <h2>Map Self-Play Tests</h2>
+    <span class="section-badge" id="badge-map"></span>
+  </div>
+  <div class="section-body collapsed" id="body-map">
+    <div id="mapResults"><p style="color:var(--dim);font-size:13px;padding:8px 0">No cached data. Click the button above to run tests.</p></div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header" onclick="toggleSection('mov')">
+    <span class="arrow" id="arrow-mov">&#9654;</span>
+    <h2>Movement Tests</h2>
+    <span class="section-badge" id="badge-mov"></span>
+  </div>
+  <div class="section-body collapsed" id="body-mov">
+    <div id="results"><p style="color:var(--dim);font-size:13px;padding:8px 0">No cached data. Click the button above to run tests.</p></div>
+  </div>
+</div>
 
 <script>
 let testData = null;
 let mapTestData = null;
 let bbTestData = null;
+let testsRanAt = null; // ISO string from server
 let activeReplay = null; // {idx, playing, speed, currentTick, maxTick, lastFrameTime, canvas, ctx}
+
+function toggleSection(id) {
+  const body = document.getElementById('body-' + id);
+  const arrow = document.getElementById('arrow-' + id);
+  body.classList.toggle('collapsed');
+  arrow.classList.toggle('open');
+}
+
+function updateRunButton() {
+  const btn = document.getElementById('runBtn');
+  if (!testsRanAt) {
+    btn.textContent = 'Run All Tests';
+    return;
+  }
+  const ranDate = new Date(testsRanAt);
+  const updateAge = () => {
+    const secs = Math.floor((Date.now() - ranDate.getTime()) / 1000);
+    const h = String(Math.floor(secs / 3600)).padStart(2, '0');
+    const m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
+    const s = String(secs % 60).padStart(2, '0');
+    btn.textContent = `Rerun Tests (${h}:${m}:${s} old)`;
+  };
+  updateAge();
+  setInterval(updateAge, 1000);
+}
+
+function updateSectionBadge(id, passed, failed) {
+  const el = document.getElementById('badge-' + id);
+  if (passed + failed === 0) { el.textContent = ''; return; }
+  const color = failed > 0 ? 'var(--red)' : 'var(--green)';
+  el.innerHTML = `<span style="color:${color}">${passed}/${passed + failed}</span>`;
+}
 
 async function runTests() {
   const btn = document.getElementById('runBtn');
@@ -74,6 +142,8 @@ async function runTests() {
     const totalP = data.passed + (data.map_passed || 0) + (data.bb_passed || 0);
     const totalF = data.failed + (data.map_failed || 0) + (data.bb_failed || 0);
     status.textContent = `${totalP} passed, ${totalF} failed in ${data.elapsed_ms}ms`;
+    testsRanAt = new Date().toISOString();
+    updateRunButton();
     renderResults();
     renderMapResults();
     renderBbResults();
@@ -83,11 +153,17 @@ async function runTests() {
 
 async function loadCached() {
   try {
-    const [movR, mapR, bbR] = await Promise.all([
+    const [movR, mapR, bbR, statusR] = await Promise.all([
       fetch('/api/tests/results'),
       fetch('/api/tests/map-results'),
-      fetch('/api/tests/bb-map-results')
+      fetch('/api/tests/bb-map-results'),
+      fetch('/api/tests/status')
     ]);
+    const statusData = await statusR.json();
+    if (statusData.ran_at) {
+      testsRanAt = statusData.ran_at;
+      updateRunButton();
+    }
     const results = await movR.json();
     if (results.length > 0) {
       const passed = results.filter(r => r.passed).length;
@@ -108,6 +184,9 @@ async function loadCached() {
 
 function renderMapResults() {
   if (!mapTestData) return;
+  const passed = mapTestData.filter(r => r.passed).length;
+  const failed = mapTestData.filter(r => !r.passed).length;
+  updateSectionBadge('map', passed, failed);
   const el = document.getElementById('mapResults');
   el.innerHTML = mapTestData.map(t => {
     const outcome = t.feature_notes?.outcome || '';
@@ -146,6 +225,9 @@ async function launchMapReplay(mapName) {
 
 function renderBbResults() {
   if (!bbTestData) return;
+  const passed = bbTestData.filter(r => r.passed).length;
+  const failed = bbTestData.filter(r => !r.passed).length;
+  updateSectionBadge('bb', passed, failed);
   const el = document.getElementById('bbResults');
   el.innerHTML = bbTestData.map(t => {
     const outcome = t.feature_notes?.outcome || '';
@@ -186,6 +268,9 @@ async function launchBbReplay(mapName) {
 
 function renderResults() {
   if (!testData) return;
+  const passed = testData.passed;
+  const failed = testData.failed;
+  updateSectionBadge('mov', passed, failed);
   const el = document.getElementById('results');
   el.innerHTML = testData.results.map((t, i) => `
     <div class="card" id="test-${i}" onclick="toggleReplay(${i})">

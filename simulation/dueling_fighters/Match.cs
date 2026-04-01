@@ -347,15 +347,27 @@ public partial class Match
 
     private void TickHazardZones(Fighter f, int fighterIdx)
     {
-        if (!Arena.IsOnGround(f.Position, f.BodyRadius)) return;
-        float dmgRate = Arena.GetHazardDamageRate(f.Position);
+        bool grounded = Arena.IsOnGround(f.Position, f.BodyRadius);
+        float dmgRate = grounded ? Arena.GetHazardDamageRate(f.Position) : 0f;
+
         if (dmgRate > 0)
         {
+            // In zone: apply damage and refresh burn timer
+            f.HazardBurnTicks = Fighter.HazardBurnDuration;
+            f.HazardBurnRate = dmgRate;
             float dmg = dmgRate * SimPhysics.FixedDt;
             f.ApplyDamage(dmg);
             HazardDamageTaken[fighterIdx] += dmg;
             if (Tick % 30 == 0)
                 f.Velocity += new Vector2(0, -40f);
+        }
+        else if (f.HazardBurnTicks > 0)
+        {
+            // Out of zone but still burning
+            float dmg = f.HazardBurnRate * SimPhysics.FixedDt;
+            f.ApplyDamage(dmg);
+            HazardDamageTaken[fighterIdx] += dmg;
+            f.HazardBurnTicks--;
         }
     }
 
@@ -382,10 +394,11 @@ public partial class Match
             float dist = f.Position.DistanceTo(new Vector2(pickup.X, pickup.Y));
             if (dist < f.BodyRadius + 12f) // 12px pickup radius
             {
-                // Heal the fighter
-                float healAmount = Mathf.Min(pickup.HealAmount, pickup.MaxHp - f.Health);
-                if (healAmount > 0)
-                    f.ApplyDamage(-healAmount); // negative damage = heal
+                // Always consume — heal and clear burn
+                f.ApplyDamage(-pickup.HealAmount); // negative damage = heal
+                f.Health = Mathf.Min(f.Health, 100f); // clamp to max
+                f.HazardBurnTicks = 0;
+                f.HazardBurnRate = 0f;
 
                 // Pickup feedback: small upward burst (visible jump-like effect)
                 f.Velocity += new Vector2(0, -80f);

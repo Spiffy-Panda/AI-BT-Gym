@@ -437,6 +437,10 @@ public partial class ReplayRunner : Node2D
             Rates = [m.Rates[0], m.Rates[1]],
             Projectiles = projSnaps,
             RifleFlashes = rifleFlashes?.Count > 0 ? rifleFlashes.ToArray() : null,
+            PickupActive = m.PickupActive.Length > 0 ? (bool[])m.PickupActive.Clone() : null,
+            WallHp = m.DestructibleWallHp.Length > 0 ? (float[])m.DestructibleWallHp.Clone() : null,
+            WallExists = m.DestructibleWallExists.Length > 0 ? (bool[])m.DestructibleWallExists.Clone() : null,
+            EffectiveLeft = m.EffectiveLeft, EffectiveRight = m.EffectiveRight,
             IsOver = m.IsOver, WinnerIdx = m.WinnerTeam
         };
     }
@@ -624,6 +628,19 @@ public partial class ReplayRunner : Node2D
                         _beaconMatchRef.Projectiles.Add(proj);
                     }
                 }
+
+                // Restore modifier feature state (pickups, walls, shrink)
+                if (snap.PickupActive != null && _beaconMatchRef.PickupActive.Length > 0)
+                    Array.Copy(snap.PickupActive, _beaconMatchRef.PickupActive,
+                        Math.Min(snap.PickupActive.Length, _beaconMatchRef.PickupActive.Length));
+                if (snap.WallHp != null && _beaconMatchRef.DestructibleWallHp.Length > 0)
+                    Array.Copy(snap.WallHp, _beaconMatchRef.DestructibleWallHp,
+                        Math.Min(snap.WallHp.Length, _beaconMatchRef.DestructibleWallHp.Length));
+                if (snap.WallExists != null && _beaconMatchRef.DestructibleWallExists.Length > 0)
+                    Array.Copy(snap.WallExists, _beaconMatchRef.DestructibleWallExists,
+                        Math.Min(snap.WallExists.Length, _beaconMatchRef.DestructibleWallExists.Length));
+                _beaconMatchRef.EffectiveLeft = snap.EffectiveLeft;
+                _beaconMatchRef.EffectiveRight = snap.EffectiveRight;
 
                 // Feed rifle flashes to renderer
                 if (snap.RifleFlashes != null && _projectileRenderer != null)
@@ -1033,9 +1050,23 @@ public partial class ReplayRunner : Node2D
             featureState = new { beacons = beaconStates, rates = snap.Rates };
         }
 
+        // Build timestamp from DLL modification time
+        string buildTime = "unknown";
+        var asm = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        if (!string.IsNullOrEmpty(asm) && File.Exists(asm))
+            buildTime = File.GetLastWriteTime(asm).ToString("yyyy-MM-dd HH:mm:ss");
+        else
+        {
+            // Fallback: search for project DLL in .godot build output
+            var dllPath = Path.Combine(ProjectSettings.GlobalizePath("res://"), ".godot", "mono", "temp", "bin", "Debug", "AI-BT-Gym.dll");
+            if (File.Exists(dllPath))
+                buildTime = File.GetLastWriteTime(dllPath).ToString("yyyy-MM-dd HH:mm:ss");
+        }
+
         return new
         {
             timestamp,
+            build = buildTime,
             match_name = _matchName,
             replay_file = _battleLogPath,
             tick = _displayTick,

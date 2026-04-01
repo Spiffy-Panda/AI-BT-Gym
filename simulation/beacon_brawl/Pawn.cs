@@ -21,6 +21,12 @@ public class Pawn
     // ── Health ──
     public const float MaxHealth = 100f;
     public float Health { get; set; } = MaxHealth;
+    public float HazardDamageTaken { get; set; }
+    /// <summary>Ticks remaining of hazard burn (persists after leaving zone).</summary>
+    public int HazardBurnTicks { get; set; }
+    /// <summary>Damage rate of the active burn (matches the zone that caused it).</summary>
+    public float HazardBurnRate { get; set; }
+    public const int HazardBurnDuration = 60; // 1 second at 60fps
     public bool IsDead { get; set; }
     public int RespawnTimer { get; set; }
     public const int RespawnDuration = 180; // 3 seconds at 60fps
@@ -139,6 +145,8 @@ public class Pawn
         StunTicksRemaining = 0;
         GrabRootTicks = 0;
         ParryActiveTicks = 0;
+        HazardBurnTicks = 0;
+        HazardBurnRate = 0f;
         Hook.ForceRetract();
     }
 

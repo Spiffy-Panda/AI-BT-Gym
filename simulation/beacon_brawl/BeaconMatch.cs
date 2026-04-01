@@ -332,12 +332,29 @@ public class BeaconMatch
         if (Arena.Modifiers.HazardZones.Count == 0) return;
         foreach (var pawn in AllPawns)
         {
-            if (pawn.IsDead || !Arena.IsOnGround(pawn.Position, pawn.BodyRadius)) continue;
-            float dmgRate = Arena.GetHazardDamageRate(pawn.Position);
+            if (pawn.IsDead) continue;
+
+            // Check if standing in a hazard zone
+            bool grounded = Arena.IsOnGround(pawn.Position, pawn.BodyRadius);
+            float dmgRate = grounded ? Arena.GetHazardDamageRate(pawn.Position) : 0f;
+
             if (dmgRate > 0)
             {
-                pawn.TakeDamage(dmgRate * BeaconPhysics.FixedDt);
+                // In zone: apply damage and refresh burn timer
+                pawn.HazardBurnTicks = Pawn.HazardBurnDuration;
+                pawn.HazardBurnRate = dmgRate;
+                float dmg = dmgRate * BeaconPhysics.FixedDt;
+                pawn.TakeDamage(dmg);
+                pawn.HazardDamageTaken += dmg;
                 if (Tick % 30 == 0) pawn.Velocity += new Vector2(0, -40f);
+            }
+            else if (pawn.HazardBurnTicks > 0)
+            {
+                // Out of zone but still burning
+                float dmg = pawn.HazardBurnRate * BeaconPhysics.FixedDt;
+                pawn.TakeDamage(dmg);
+                pawn.HazardDamageTaken += dmg;
+                pawn.HazardBurnTicks--;
             }
         }
     }
@@ -359,8 +376,9 @@ public class BeaconMatch
                 if (!PickupActive[i]) continue;
                 if (pawn.Position.DistanceTo(new Vector2(pickups[i].X, pickups[i].Y)) < pawn.BodyRadius + 12f)
                 {
-                    float heal = Mathf.Min(pickups[i].HealAmount, Pawn.MaxHealth - pawn.Health);
-                    if (heal > 0) pawn.Health = Mathf.Min(Pawn.MaxHealth, pawn.Health + heal);
+                    pawn.Health = Mathf.Min(Pawn.MaxHealth, pawn.Health + pickups[i].HealAmount);
+                    pawn.HazardBurnTicks = 0;
+                    pawn.HazardBurnRate = 0f;
                     pawn.Velocity += new Vector2(0, -80f);
                     PickupActive[i] = false;
                     PickupRespawnTimer[i] = (int)(pickups[i].RespawnSeconds * 60f);

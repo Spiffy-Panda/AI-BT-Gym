@@ -27,7 +27,7 @@ public partial class BeaconArenaRenderer : Node2D
     private static readonly Color FrictionZoneColor = new(0.3f, 0.5f, 0.3f, 0.25f);
     private static readonly Color BumperColor = new(0.6f, 0.6f, 0.2f);
     private static readonly Color PickupColor = new(0.2f, 0.8f, 0.3f);
-    private static readonly Color PickupInactiveColor = new(0.2f, 0.8f, 0.3f, 0.2f);
+    private static readonly Color PickupInactiveColor = new(0.35f, 0.35f, 0.35f, 0.3f);
     private static readonly Color ModPlatformColor = new(0.35f, 0.45f, 0.65f);
     private static readonly Color DestructibleWallColor = new(0.5f, 0.4f, 0.3f);
     private static readonly Color DestructibleWallDamagedColor = new(0.6f, 0.3f, 0.2f);
@@ -56,12 +56,13 @@ public partial class BeaconArenaRenderer : Node2D
         DrawHazardZones(mods, bounds);
         DrawWallFrictionZones(mods, bounds);
 
-        // Walls
+        // Walls — shift outward by half thickness so inner edge aligns with bounds
         float t = Arena.WallThickness;
-        var tl = bounds.Position;
-        var tr = new Vector2(bounds.End.X, bounds.Position.Y);
-        var bl = new Vector2(bounds.Position.X, bounds.End.Y);
-        var br = bounds.End;
+        float ht = t / 2f;
+        var tl = bounds.Position + new Vector2(-ht, -ht);
+        var tr = new Vector2(bounds.End.X + ht, bounds.Position.Y - ht);
+        var bl = new Vector2(bounds.Position.X - ht, bounds.End.Y + ht);
+        var br = bounds.End + new Vector2(ht, ht);
 
         // Ceiling (potentially shaped)
         if (mods.Ceiling != null)
@@ -171,13 +172,13 @@ public partial class BeaconArenaRenderer : Node2D
 
     private void DrawHazardZones(ArenaConfig mods, Rect2 bounds)
     {
+        const float hazardHeight = 6f; // ~1/5 of pawn diameter (32px)
+        float floorSurface = bounds.End.Y; // inner edge of floor
         foreach (var hz in mods.HazardZones)
         {
-            float floorY = bounds.End.Y;
-            var rect = new Rect2(hz.X, floorY - 5f, hz.Width, 5f);
+            var rect = new Rect2(hz.X, floorSurface - hazardHeight, hz.Width, hazardHeight);
             DrawRect(rect, HazardColor);
-            DrawLine(new Vector2(hz.X, floorY - 5f), new Vector2(hz.X, floorY), HazardBorderColor, 1f);
-            DrawLine(new Vector2(hz.X + hz.Width, floorY - 5f), new Vector2(hz.X + hz.Width, floorY), HazardBorderColor, 1f);
+            DrawLine(new Vector2(hz.X, floorSurface - hazardHeight), new Vector2(hz.X + hz.Width, floorSurface - hazardHeight), HazardBorderColor, 1.5f);
         }
     }
 

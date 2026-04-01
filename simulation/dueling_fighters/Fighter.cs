@@ -15,6 +15,11 @@ public class Fighter
     public bool IsGrounded { get; set; }
     public float BodyRadius { get; set; } = 18f;
 
+    // Hazard burn (persists after leaving zone)
+    public int HazardBurnTicks { get; set; }
+    public float HazardBurnRate { get; set; }
+    public const int HazardBurnDuration = 60; // 1 second at 60fps
+
     public Fist LeftFist { get; } = new();
     public Fist RightFist { get; } = new();
 

@@ -136,12 +136,15 @@ public static class BeaconMapTests
     {
         if (modifiers == null) return;
 
-        // Hazard zones: some pawns should have taken hazard damage
+        // Hazard zones: at least one pawn should have taken hazard-specific damage
         if (modifiers.HazardZones.Count > 0)
         {
-            // Pawns don't track hazard damage individually — check if any pawn health is < max
-            bool anyDamage = match.AllPawns.Any(p => p.Health < Pawn.MaxHealth || p.IsDead);
-            notes["hazards"] = anyDamage ? "active (pawns took damage)" : "no_hazard_damage";
+            float totalHazardDmg = match.AllPawns.Sum(p => p.HazardDamageTaken);
+            notes["hazards"] = totalHazardDmg > 0
+                ? $"active (total hazard dmg: {totalHazardDmg:F1})"
+                : "no_hazard_damage";
+            if (totalHazardDmg <= 0)
+                errors.Add("Hazard zones dealt no damage — pawns may not be walking through them");
         }
 
         // Destructible walls

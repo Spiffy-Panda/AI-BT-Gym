@@ -165,8 +165,8 @@ public static class ArenaMaps
     {
         HazardZones =
         [
-            new HazardZoneConfig { X = 550f, Width = 150f, DamagePerSecond = 3f },
-            new HazardZoneConfig { X = 800f, Width = 150f, DamagePerSecond = 3f }
+            new HazardZoneConfig { X = 550f, Width = 150f, DamagePerSecond = 30f },
+            new HazardZoneConfig { X = 800f, Width = 150f, DamagePerSecond = 30f }
         ]
     };
 
@@ -200,8 +200,8 @@ public static class ArenaMaps
         Platforms = [new PlatformConfig { X = 750f, Y = 400f, Width = 300f }],
         HazardZones =
         [
-            new HazardZoneConfig { X = 550f, Width = 150f, DamagePerSecond = 3f },
-            new HazardZoneConfig { X = 800f, Width = 150f, DamagePerSecond = 3f }
+            new HazardZoneConfig { X = 550f, Width = 150f, DamagePerSecond = 30f },
+            new HazardZoneConfig { X = 800f, Width = 150f, DamagePerSecond = 30f }
         ],
         CornerBumpers =
         [
@@ -220,10 +220,10 @@ public static class ArenaMaps
         Width = 2000f, Height = 800f,
         HazardZones =
         [
-            new HazardZoneConfig { X = 350f, Width = 150f, DamagePerSecond = 3f },
-            new HazardZoneConfig { X = 600f, Width = 150f, DamagePerSecond = 3f },
-            new HazardZoneConfig { X = 1250f, Width = 150f, DamagePerSecond = 3f },
-            new HazardZoneConfig { X = 1500f, Width = 150f, DamagePerSecond = 3f }
+            new HazardZoneConfig { X = 350f, Width = 150f, DamagePerSecond = 30f },
+            new HazardZoneConfig { X = 600f, Width = 150f, DamagePerSecond = 30f },
+            new HazardZoneConfig { X = 1250f, Width = 150f, DamagePerSecond = 30f },
+            new HazardZoneConfig { X = 1500f, Width = 150f, DamagePerSecond = 30f }
         ]
     };
 
@@ -270,8 +270,8 @@ public static class ArenaMaps
         Width = 2000f, Height = 800f,
         HazardZones =
         [
-            new HazardZoneConfig { X = 350f, Width = 150f, DamagePerSecond = 3f },
-            new HazardZoneConfig { X = 1500f, Width = 150f, DamagePerSecond = 3f }
+            new HazardZoneConfig { X = 350f, Width = 150f, DamagePerSecond = 30f },
+            new HazardZoneConfig { X = 1500f, Width = 150f, DamagePerSecond = 30f }
         ],
         Platforms =
         [
