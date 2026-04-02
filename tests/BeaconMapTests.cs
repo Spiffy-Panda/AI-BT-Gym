@@ -209,4 +209,120 @@ public static class BeaconMapTests
         GD.Print("═══════════════════════════════════════");
         return failed;
     }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Informed vs Uninformed experiments
+    // ═════════════════════════════════════════════════════════════════════
+
+    public record MatchupResult
+    {
+        public string Label { get; init; } = "";
+        public string MapName { get; init; } = "";
+        public int InformedWins { get; init; }
+        public int UninformedWins { get; init; }
+        public int Draws { get; init; }
+        public int TotalGames { get; init; }
+        public float InformedWinRate => TotalGames > 0 ? InformedWins / (float)TotalGames : 0f;
+        public int InformedAvgScore { get; init; }
+        public int UninformedAvgScore { get; init; }
+    }
+
+    private static readonly (string label, string map, ArenaConfig mods,
+        bool pickups, bool hazards, bool walls)[] AsymmetricPresets =
+    [
+        ("NoPickups_vs_Informed", "BB_Pickups", ArenaMaps.BeaconPickups,
+            false, true, true),
+        ("NoHazards_vs_Informed", "BB_Hazards", ArenaMaps.BeaconHazards,
+            true, false, true),
+        ("NoWalls_vs_Informed", "BB_CenterWall", ArenaMaps.BeaconCenterWall,
+            true, true, false),
+        ("NoMapAware_vs_Informed_Combined", "BB_Combined", ArenaMaps.BeaconCombined,
+            false, false, false),
+        ("NoPickups_vs_Informed_Combined", "BB_Combined", ArenaMaps.BeaconCombined,
+            false, true, true),
+        ("NoHazards_vs_Informed_Combined", "BB_Combined", ArenaMaps.BeaconCombined,
+            true, false, true),
+    ];
+
+    public static List<MatchupResult> RunInformedVsUninformed(int gamesPerMatchup = 10)
+    {
+        var informed = AiBtGym.Godot.BeaconTestTeam.GetEntry();
+        var results = new List<MatchupResult>();
+
+        foreach (var (label, mapName, mods, pickups, hazards, walls) in AsymmetricPresets)
+        {
+            var uninformed = AiBtGym.Godot.BeaconTestTeam.GetEntry(
+                $"Uninformed_{label}", "#e74c3c",
+                usePickups: pickups, useHazards: hazards, useWalls: walls);
+
+            int iWins = 0, uWins = 0, draws = 0;
+            long iScoreTotal = 0, uScoreTotal = 0;
+
+            for (int g = 0; g < gamesPerMatchup; g++)
+            {
+                // Alternate sides to remove spawn bias
+                bool informedIsTeamA = g % 2 == 0;
+                var teamA = informedIsTeamA ? informed : uninformed;
+                var teamB = informedIsTeamA ? uninformed : informed;
+
+                var arena = new BeaconArena(modifiers: mods);
+                var match = new BeaconMatch(arena,
+                    teamA.PawnTrees, teamA.PawnRoles,
+                    teamB.PawnTrees, teamB.PawnRoles,
+                    seed: 100 + g);
+                match.MaxTicks = 90 * 60;
+
+                while (!match.IsOver)
+                    match.Step();
+
+                int aScore = match.Scores[0], bScore = match.Scores[1];
+                int informedScore = informedIsTeamA ? aScore : bScore;
+                int uninformedScore = informedIsTeamA ? bScore : aScore;
+                iScoreTotal += informedScore;
+                uScoreTotal += uninformedScore;
+
+                int winner = match.WinnerTeam; // 0=A, 1=B, -1=draw
+                if (winner == -1) draws++;
+                else if ((winner == 0 && informedIsTeamA) || (winner == 1 && !informedIsTeamA))
+                    iWins++;
+                else
+                    uWins++;
+            }
+
+            results.Add(new MatchupResult
+            {
+                Label = label,
+                MapName = mapName,
+                InformedWins = iWins,
+                UninformedWins = uWins,
+                Draws = draws,
+                TotalGames = gamesPerMatchup,
+                InformedAvgScore = (int)(iScoreTotal / gamesPerMatchup),
+                UninformedAvgScore = (int)(uScoreTotal / gamesPerMatchup),
+            });
+        }
+
+        return results;
+    }
+
+    public static void PrintMatchupResults(List<MatchupResult> results)
+    {
+        GD.Print("═══════════════════════════════════════════════════════════");
+        GD.Print("  Informed vs Uninformed — Map Knowledge Experiment");
+        GD.Print("═══════════════════════════════════════════════════════════");
+
+        foreach (var r in results)
+        {
+            string bar = new('█', (int)(r.InformedWinRate * 20));
+            string gap = new('░', 20 - bar.Length);
+            GD.Print($"  {r.Label}");
+            GD.Print($"    Map: {r.MapName} | Games: {r.TotalGames}");
+            GD.Print($"    Informed:   {r.InformedWins}W / {r.UninformedWins}L / {r.Draws}D  ({r.InformedWinRate:P0})");
+            GD.Print($"    Avg Score:  Informed {r.InformedAvgScore} vs Uninformed {r.UninformedAvgScore}");
+            GD.Print($"    [{bar}{gap}]");
+            GD.Print("");
+        }
+
+        GD.Print("═══════════════════════════════════════════════════════════");
+    }
 }

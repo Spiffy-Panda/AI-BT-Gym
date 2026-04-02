@@ -9,7 +9,7 @@
 // The team is a generalist that reacts to any modifier combination:
 // - Hazard avoidance (move off hazard zones)
 // - Pickup collection (detour when hurt)
-// - Shrink awareness (stay within effective bounds)
+// - Wall destruction (break walls to open sightlines)
 // - Standard beacon capture + defense + combat
 
 using System.Collections.Generic;
@@ -32,94 +32,86 @@ public static class BeaconTestTeam
         Color
     );
 
+    /// <summary>
+    /// Create a variant with selective map knowledge disabled.
+    /// Use for informed-vs-uninformed experiments.
+    /// </summary>
+    public static BeaconTeamEntry GetEntry(string name, string color,
+        bool usePickups = true, bool useHazards = true, bool useWalls = true) => new(
+        name,
+        [BuildGrappler(usePickups, useHazards, useWalls),
+         BuildGunner(usePickups, useHazards, useWalls)],
+        [PawnRole.Grappler, PawnRole.Gunner],
+        color
+    );
+
     static BtNode C(string expr) => Cond(expr);
 
     /// <summary>Grappler: hazard-aware, pickup-hungry, generalist capper + brawler.</summary>
-    public static List<BtNode> BuildGrappler() =>
-    [
-        Sel(
-            HookStateMachine(),
+    public static List<BtNode> BuildGrappler(bool usePickups = true, bool useHazards = true, bool useWalls = true)
+    {
+        var children = new List<BtNode>();
+        children.Add(HookStateMachine());
 
-            // Heal at base when critical
-            HealAtBase(0.2f),
+        // Heal at base when critical (always available)
+        children.Add(HealAtBase(0.2f));
 
-            // Reactive parry
-            ParryReact(),
+        // ── Map awareness (after heal, before combat) ──
+        if (useHazards) children.Add(AvoidHazard());
+        if (usePickups) children.Add(SeekHealthPak());
 
-            // Exploit vulnerability windows
-            ExploitVulnerable(),
+        children.Add(ParryReact());
+        children.Add(ExploitVulnerable());
+        children.Add(PunishLockedOut());
+        children.Add(Seq("Engage near beacon", C("owned_beacon_count > 0"), C("nearest_enemy_dist < 400"),
+            GrapplerEngage()));
 
-            // Punish locked-out enemies
-            PunishLockedOut(),
+        if (useWalls) children.Add(BreakWall());
 
-            // Engage enemies near beacons
-            Seq("Engage near beacon", C("owned_beacon_count > 0"), C("nearest_enemy_dist < 400"),
-                GrapplerEngage()),
+        children.Add(DefendOwnedBeacon());
+        children.Add(CapNearestSideFirst());
+        children.Add(Seq("Push center", C("owned_beacon_count >= 2"), C("beacon_center_owner != 1"),
+            ReachCenterPlatform()));
+        children.Add(GrapplerPlatformDive());
+        children.Add(ScoreAwarePush());
+        children.Add(OffensiveRotation());
+        children.Add(LateGamePush());
+        children.Add(CapNearestUnowned());
+        children.Add(Act("move_toward_nearest_unowned"));
 
-            // Defend owned beacons
-            DefendOwnedBeacon(),
-
-            // Cap nearest side first
-            CapNearestSideFirst(),
-
-            // Push center when sides owned
-            Seq("Push center", C("owned_beacon_count >= 2"), C("beacon_center_owner != 1"),
-                ReachCenterPlatform()),
-
-            // Platform dive
-            GrapplerPlatformDive(),
-
-            // Score-aware aggression
-            ScoreAwarePush(),
-            OffensiveRotation(),
-            LateGamePush(),
-
-            // Default: cap nearest unowned
-            CapNearestUnowned(),
-            Act("move_toward_nearest_unowned")
-        )
-    ];
+        return [Sel(children.ToArray())];
+    }
 
     /// <summary>Gunner: hazard-aware, ranged pressure from safe positions.</summary>
-    public static List<BtNode> BuildGunner() =>
-    [
-        Sel(
-            // Heal at base when hurt
-            HealAtBase(0.25f),
+    public static List<BtNode> BuildGunner(bool usePickups = true, bool useHazards = true, bool useWalls = true)
+    {
+        var children = new List<BtNode>();
 
-            // Parry if grappler gets close
-            ParryReact(),
+        // Heal at base when hurt (always available)
+        children.Add(HealAtBase(0.25f));
 
-            // Exploit vulnerable targets
-            ExploitVulnerable(),
+        // ── Map awareness (after heal, before combat) ──
+        if (useHazards) children.Add(AvoidHazard());
+        if (usePickups) children.Add(SeekHealthPak());
 
-            // Kite close enemies
-            GunnerKite(250),
+        children.Add(ParryReact());
+        children.Add(ExploitVulnerable());
 
-            // Snipe from range
-            GunnerSnipe(800, 350),
+        if (useWalls) children.Add(BreakWall());
 
-            // Fire from beacon position
-            Seq("Fire from beacon", C("in_beacon_left == 1 | in_beacon_right == 1"),
-                GunnerPressure()),
+        children.Add(GunnerKite(250));
+        children.Add(GunnerSnipe(800, 350));
+        children.Add(Seq("Fire from beacon", C("in_beacon_left == 1 | in_beacon_right == 1"),
+            GunnerPressure()));
+        children.Add(DefendOwnedBeacon());
+        children.Add(CapNearestSideFirst());
+        children.Add(CapNearestUnowned());
+        children.Add(Seq("Help center", C("owned_beacon_count >= 2"), C("beacon_center_owner != 1"),
+            GunnerMobility()));
+        children.Add(ContestBeacon());
+        children.Add(LateGamePush());
+        children.Add(Act("move_toward_nearest_unowned"));
 
-            // Defend beacons
-            DefendOwnedBeacon(),
-
-            // Cap nearest
-            CapNearestSideFirst(),
-            CapNearestUnowned(),
-
-            // Push center with mobility
-            Seq("Help center", C("owned_beacon_count >= 2"), C("beacon_center_owner != 1"),
-                GunnerMobility()),
-
-            // Contest enemy beacons
-            ContestBeacon(),
-            LateGamePush(),
-
-            // Default
-            Act("move_toward_nearest_unowned")
-        )
-    ];
+        return [Sel(children.ToArray())];
+    }
 }

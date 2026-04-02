@@ -47,6 +47,9 @@ public static class BeaconSubTrees
         ["PunishLockedOut"] = () => [PunishLockedOut()],
         ["GunnerPressure"] = () => [GunnerPressure()],
         ["GrapplerPlatformDive"] = () => [GrapplerPlatformDive()],
+        ["SeekHealthPak"] = () => [SeekHealthPak()],
+        ["AvoidHazard"] = () => [AvoidHazard()],
+        ["BreakWall"] = () => [BreakWall()],
     };
 
     // ═════════════════════════════════════════════════════════════════════
@@ -336,4 +339,59 @@ public static class BeaconSubTrees
             Seq("Retreat on cooldown", C($"nearest_enemy_dist < {retreatDist}"),
                 C("rifle_ready == 0"), C("pistol_ready == 0"), Act("move_away_from_nearest_enemy"))
         ) with { SubTree = "GunnerKite" };
+
+    // ═════════════════════════════════════════════════════════════════════
+    // MAP FEATURE PATTERNS
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Seek health pickups when hurt. Gates on pickup_count so it's a no-op
+    /// on maps without pickups. Moves toward the nearest active pickup.
+    /// </summary>
+    public static BtNode SeekHealthPak(float urgentPct = 0.5f, float criticalPct = 0.25f) =>
+        Sel("Seek health pak",
+            // Critical HP: go to pickup even if far away
+            Seq("Critical heal", C($"my_health_pct < {criticalPct}"), C("pickup_count > 0"),
+                C("nearest_pickup_dist < 9000"), Act("move_toward_nearest_pickup")),
+            // Hurt and pickup is nearby: quick detour
+            Seq("Opportunistic heal", C($"my_health_pct < {urgentPct}"), C("pickup_count > 0"),
+                C("nearest_pickup_dist < 400"), Act("move_toward_nearest_pickup"))
+        ) with { SubTree = "SeekHealthPak" };
+
+    /// <summary>
+    /// Avoid hazard zones — jump and walk off when standing on one.
+    /// Hazard zones are placed between beacons (not overlapping), so pawns
+    /// that step into them should actively escape rather than tank the damage.
+    /// At critical HP, retreats to base instead.
+    /// </summary>
+    public static BtNode AvoidHazard() =>
+        Sel("Avoid hazard",
+            // Critical HP on hazard → flee to base
+            Seq("Flee hazard critical", C("on_hazard == 1"), C("my_health_pct < 0.15"),
+                Act("move_toward_base")),
+            // On hazard grounded → jump to stop contact damage
+            Seq("Jump off hazard", C("on_hazard == 1"), C("is_grounded == 1"), Act("jump")),
+            // On hazard airborne → walk toward nearest zone edge to escape
+            Seq("Walk off hazard", C("on_hazard == 1"), Act("move_off_hazard")),
+            // Burning after leaving → hop to clear residual faster
+            Seq("Hop while burning", C("burning == 1"), C("is_grounded == 1"), Act("jump"))
+        ) with { SubTree = "AvoidHazard" };
+
+    /// <summary>
+    /// Attack through destructible walls to break them open.
+    /// Projectiles already damage walls on collision, so shooting at enemies
+    /// behind a wall also degrades the wall. Grappler walks to wall to punch.
+    /// </summary>
+    public static BtNode BreakWall() =>
+        Sel("Break wall",
+            // Rifle through wall — damages wall AND may hit enemy behind it
+            Seq("Rifle through wall", C("wall_0_exists == 1"), C("rifle_ready == 1"),
+                Act("shoot_rifle_at_enemy")),
+            // Pistol through wall
+            Seq("Pistol through wall", C("wall_0_exists == 1"), C("pistol_ready == 1"),
+                Act("shoot_pistol_at_enemy")),
+            // Grappler: walk toward center wall to punch it down
+            Seq("Walk to wall", C("wall_0_exists == 1"), C("fist_ready == 1"),
+                C("nearest_enemy_dist > 200"), Act("move_toward_beacon_center"))
+        ) with { SubTree = "BreakWall" };
 }

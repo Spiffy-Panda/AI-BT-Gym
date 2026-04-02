@@ -201,8 +201,75 @@ public class PawnBtContext : IBtContext
             "ally1_pos_x" => NearestAlly()?.Position.X ?? _pawn.Position.X,
             "ally1_pos_y" => NearestAlly()?.Position.Y ?? _pawn.Position.Y,
 
-            _ => 0f
+            // ── Map awareness: static counts ──
+            "hazard_count" => _arena.Modifiers.HazardZones.Count,
+            "pickup_count" => _arena.Modifiers.Pickups.Count,
+            "wall_count" => _arena.Modifiers.DestructibleWalls.Count,
+
+            // ── Map awareness: dynamic state ──
+            "on_hazard" => (_arena.IsOnGround(_pawn.Position, _pawn.BodyRadius) && _arena.IsInHazardZone(_pawn.Position)) ? 1f : 0f,
+            "burning" => _pawn.HazardBurnTicks > 0 ? 1f : 0f,
+            "nearest_pickup_dist" => NearestActivePickupDist(),
+
+            // Indexed variables handled below
+            _ => ResolveIndexedVariable(name)
         };
+    }
+
+    private float ResolveIndexedVariable(string name)
+    {
+        // Pickup indexed: pickup_N_active, pickup_N_x, pickup_N_y, pickup_N_dist
+        if (name.StartsWith("pickup_") && _match != null)
+        {
+            var parts = name.Split('_');
+            if (parts.Length == 3 && int.TryParse(parts[1], out int idx)
+                && idx >= 0 && idx < _arena.Modifiers.Pickups.Count
+                && idx < _match.PickupActive.Length)
+            {
+                var pickup = _arena.Modifiers.Pickups[idx];
+                return parts[2] switch
+                {
+                    "active" => _match.PickupActive[idx] ? 1f : 0f,
+                    "x" => pickup.X,
+                    "y" => pickup.Y,
+                    "dist" => _pawn.Position.DistanceTo(new Vector2(pickup.X, pickup.Y)),
+                    _ => 0f
+                };
+            }
+        }
+
+        // Destructible wall indexed: wall_N_hp, wall_N_exists
+        if (name.StartsWith("wall_") && _match != null)
+        {
+            var parts = name.Split('_');
+            if (parts.Length == 3 && int.TryParse(parts[1], out int idx)
+                && idx >= 0 && idx < _arena.Modifiers.DestructibleWalls.Count
+                && idx < _match.DestructibleWallHp.Length)
+            {
+                return parts[2] switch
+                {
+                    "hp" => _match.DestructibleWallHp[idx],
+                    "exists" => _match.DestructibleWallExists[idx] ? 1f : 0f,
+                    _ => 0f
+                };
+            }
+        }
+
+        return 0f;
+    }
+
+    private float NearestActivePickupDist()
+    {
+        if (_match == null) return 9999f;
+        var pickups = _arena.Modifiers.Pickups;
+        float best = 9999f;
+        for (int i = 0; i < pickups.Count && i < _match.PickupActive.Length; i++)
+        {
+            if (!_match.PickupActive[i]) continue;
+            float d = _pawn.Position.DistanceTo(new Vector2(pickups[i].X, pickups[i].Y));
+            if (d < best) best = d;
+        }
+        return best;
     }
 
     public BtStatus ExecuteAction(string action)
@@ -238,6 +305,8 @@ public class PawnBtContext : IBtContext
             "move_toward_nearest_unowned" => MoveTowardNearestUnowned(),
             "move_toward_nearest_contested" => MoveTowardNearestContested(),
             "move_toward_base" => MoveToward(_arena.BaseZones[_pawn.TeamIndex].Center),
+            "move_toward_nearest_pickup" => MoveTowardNearestPickup(),
+            "move_off_hazard" => MoveOffHazard(),
 
             // Grappling hook (Grappler only, reuses Fist chain)
             "launch_hook_up" => LaunchHook(new Vector2(0, -1)),
@@ -469,6 +538,38 @@ public class PawnBtContext : IBtContext
             if (d < bestDist) { bestDist = d; nearest = b; }
         }
         return nearest != null ? MoveToward(nearest.Zone.Center) : BtStatus.Failure;
+    }
+
+    private BtStatus MoveTowardNearestPickup()
+    {
+        if (_match == null) return BtStatus.Failure;
+        var pickups = _arena.Modifiers.Pickups;
+        Vector2? best = null;
+        float bestDist = float.MaxValue;
+        for (int i = 0; i < pickups.Count && i < _match.PickupActive.Length; i++)
+        {
+            if (!_match.PickupActive[i]) continue;
+            var pos = new Vector2(pickups[i].X, pickups[i].Y);
+            float d = _pawn.Position.DistanceTo(pos);
+            if (d < bestDist) { bestDist = d; best = pos; }
+        }
+        return best.HasValue ? MoveToward(best.Value) : BtStatus.Failure;
+    }
+
+    /// <summary>Move toward the nearest edge of the hazard zone we're standing in.</summary>
+    private BtStatus MoveOffHazard()
+    {
+        float px = _pawn.Position.X;
+        foreach (var hz in _arena.Modifiers.HazardZones)
+        {
+            if (px >= hz.X && px <= hz.X + hz.Width)
+            {
+                float distToLeft = px - hz.X;
+                float distToRight = (hz.X + hz.Width) - px;
+                return ApplyMove(distToLeft < distToRight ? -1f : 1f);
+            }
+        }
+        return BtStatus.Failure;
     }
 
     private BtStatus Jump()

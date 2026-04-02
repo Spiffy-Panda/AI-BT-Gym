@@ -34,6 +34,7 @@ public partial class TournamentRunner : Node
     private List<TestResult>? _lastTestResults;
     private List<MapTests.MapTestResult>? _lastMapTestResults;
     private List<BeaconMapTests.BeaconMapTestResult>? _lastBbMapTestResults;
+    private List<BeaconMapTests.MatchupResult>? _lastMatchupResults;
     private DateTime? _testsRanAt;
     private string _mapTestDir = "";
     private string _bbMapTestDir = "";
@@ -602,6 +603,7 @@ public partial class TournamentRunner : Node
         _lastTestResults = MovementTests.RunAll();
         _lastMapTestResults = MapTests.RunAll();
         _lastBbMapTestResults = BeaconMapTests.RunAll();
+        _lastMatchupResults = BeaconMapTests.RunInformedVsUninformed(gamesPerMatchup: 10);
         stopwatch.Stop();
         _testsRanAt = DateTime.UtcNow;
 
@@ -641,7 +643,16 @@ public partial class TournamentRunner : Node
             elapsed_ms = stopwatch.ElapsedMilliseconds,
             passed, failed, results = _lastTestResults,
             map_passed = mapPassed, map_failed = mapFailed, map_results = slimMapResults,
-            bb_passed = bbPassed, bb_failed = bbFailed, bb_results = slimBbResults
+            bb_passed = bbPassed, bb_failed = bbFailed, bb_results = slimBbResults,
+            matchup_results = _lastMatchupResults?.Select(r => new
+            {
+                label = r.Label, map = r.MapName,
+                informed_wins = r.InformedWins, uninformed_wins = r.UninformedWins,
+                draws = r.Draws, total = r.TotalGames,
+                informed_win_rate = r.InformedWinRate,
+                informed_avg_score = r.InformedAvgScore,
+                uninformed_avg_score = r.UninformedAvgScore
+            })
         });
     }
 

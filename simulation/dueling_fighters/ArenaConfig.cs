@@ -214,28 +214,28 @@ public static class ArenaMaps
 
     // ── Beacon Brawl presets (2000x800) ──
 
-    /// <summary>Hazard strips flanking each side beacon.</summary>
+    /// <summary>Hazard strips flanking each side beacon (outside beacon radius 80).</summary>
     public static ArenaConfig BeaconHazards => new()
     {
         Width = 2000f, Height = 800f,
         HazardZones =
         [
-            new HazardZoneConfig { X = 350f, Width = 150f, DamagePerSecond = 30f },
-            new HazardZoneConfig { X = 600f, Width = 150f, DamagePerSecond = 30f },
-            new HazardZoneConfig { X = 1250f, Width = 150f, DamagePerSecond = 30f },
-            new HazardZoneConfig { X = 1500f, Width = 150f, DamagePerSecond = 30f }
+            new HazardZoneConfig { X = 250f, Width = 150f, DamagePerSecond = 30f },  // left of left beacon
+            new HazardZoneConfig { X = 600f, Width = 150f, DamagePerSecond = 30f },  // right of left beacon
+            new HazardZoneConfig { X = 1250f, Width = 150f, DamagePerSecond = 30f }, // left of right beacon
+            new HazardZoneConfig { X = 1600f, Width = 150f, DamagePerSecond = 30f }  // right of right beacon
         ]
     };
 
-    /// <summary>Health pickups near bases and at center.</summary>
+    /// <summary>Health pickups: one on center platform, one per team behind hazard strips.</summary>
     public static ArenaConfig BeaconPickups => new()
     {
         Width = 2000f, Height = 800f,
         Pickups =
         [
-            new PickupSpawnConfig { X = 300f, Y = 770f, HealAmount = 15f, RespawnSeconds = 12f, MaxHp = 100f },
-            new PickupSpawnConfig { X = 1000f, Y = 770f, HealAmount = 10f, RespawnSeconds = 15f, MaxHp = 100f },
-            new PickupSpawnConfig { X = 1700f, Y = 770f, HealAmount = 15f, RespawnSeconds = 12f, MaxHp = 100f }
+            new PickupSpawnConfig { X = 200f, Y = 770f, HealAmount = 50f, RespawnSeconds = 12f, MaxHp = 100f },   // Team A side, behind left hazard
+            new PickupSpawnConfig { X = 1000f, Y = 610f, HealAmount = 50f, RespawnSeconds = 15f, MaxHp = 100f },  // Center platform
+            new PickupSpawnConfig { X = 1800f, Y = 770f, HealAmount = 50f, RespawnSeconds = 12f, MaxHp = 100f }   // Team B side, behind right hazard
         ]
     };
 
@@ -270,8 +270,8 @@ public static class ArenaMaps
         Width = 2000f, Height = 800f,
         HazardZones =
         [
-            new HazardZoneConfig { X = 350f, Width = 150f, DamagePerSecond = 30f },
-            new HazardZoneConfig { X = 1500f, Width = 150f, DamagePerSecond = 30f }
+            new HazardZoneConfig { X = 250f, Width = 150f, DamagePerSecond = 30f },  // left of left beacon
+            new HazardZoneConfig { X = 1600f, Width = 150f, DamagePerSecond = 30f }  // right of right beacon
         ],
         Platforms =
         [
@@ -280,7 +280,9 @@ public static class ArenaMaps
         ],
         Pickups =
         [
-            new PickupSpawnConfig { X = 1000f, Y = 770f, HealAmount = 12f, RespawnSeconds = 15f, MaxHp = 100f }
+            new PickupSpawnConfig { X = 200f, Y = 770f, HealAmount = 50f, RespawnSeconds = 12f, MaxHp = 100f },   // Team A side
+            new PickupSpawnConfig { X = 1000f, Y = 610f, HealAmount = 50f, RespawnSeconds = 15f, MaxHp = 100f },  // Center platform
+            new PickupSpawnConfig { X = 1800f, Y = 770f, HealAmount = 50f, RespawnSeconds = 12f, MaxHp = 100f }   // Team B side
         ],
         Shrink = new ArenaShrinkConfig { StartFraction = 0.5f, ShrinkPerStep = 80f, StepIntervalSeconds = 4f, MinWidth = 600f }
     };

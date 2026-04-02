@@ -51,6 +51,10 @@ public partial class MovementTests : Node
         var bbResults = BeaconMapTests.RunAll();
         int bbFailed = BeaconMapTests.PrintResults(bbResults);
 
+        // Run informed vs uninformed experiments
+        var matchupResults = BeaconMapTests.RunInformedVsUninformed(gamesPerMatchup: 10);
+        BeaconMapTests.PrintMatchupResults(matchupResults);
+
         GetTree().Quit((failed + mapFailed + bbFailed) > 0 ? 1 : 0);
     }
 
