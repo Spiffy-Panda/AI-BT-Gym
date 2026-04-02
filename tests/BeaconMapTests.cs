@@ -325,4 +325,109 @@ public static class BeaconMapTests
 
         GD.Print("═══════════════════════════════════════════════════════════");
     }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Head-to-head: two named teams across all map presets
+    // ═════════════════════════════════════════════════════════════════════
+
+    public record H2HResult
+    {
+        public string MapName { get; init; } = "";
+        public int AWins { get; init; }
+        public int BWins { get; init; }
+        public int Draws { get; init; }
+        public int TotalGames { get; init; }
+        public int AAvgScore { get; init; }
+        public int BAvgScore { get; init; }
+    }
+
+    private static readonly (string name, ArenaConfig? mods)[] AllMapPresets =
+    [
+        ("Flat", null),
+        ("Hazards", ArenaMaps.BeaconHazards),
+        ("Pickups", ArenaMaps.BeaconPickups),
+        ("CenterWall", ArenaMaps.BeaconCenterWall),
+        ("Shrink", ArenaMaps.BeaconShrink),
+        ("Platforms", ArenaMaps.BeaconPlatforms),
+        ("Combined", ArenaMaps.BeaconCombined),
+        ("HazardsPickups", ArenaMaps.Merge(ArenaMaps.BeaconHazards, ArenaMaps.BeaconPickups)),
+        ("HazardsShrink", ArenaMaps.Merge(ArenaMaps.BeaconHazards, ArenaMaps.BeaconShrink)),
+    ];
+
+    public static List<H2HResult> RunHeadToHead(BeaconTeamEntry teamA, BeaconTeamEntry teamB,
+        int gamesPerMap = 10)
+    {
+        var results = new List<H2HResult>();
+
+        foreach (var (mapName, mods) in AllMapPresets)
+        {
+            int aWins = 0, bWins = 0, draws = 0;
+            long aScoreTotal = 0, bScoreTotal = 0;
+
+            for (int g = 0; g < gamesPerMap; g++)
+            {
+                // Alternate sides
+                bool aIsTeam0 = g % 2 == 0;
+                var t0 = aIsTeam0 ? teamA : teamB;
+                var t1 = aIsTeam0 ? teamB : teamA;
+
+                var arena = new BeaconArena(modifiers: mods);
+                var match = new BeaconMatch(arena,
+                    t0.PawnTrees, t0.PawnRoles,
+                    t1.PawnTrees, t1.PawnRoles,
+                    seed: 200 + g);
+                match.MaxTicks = 90 * 60;
+
+                while (!match.IsOver)
+                    match.Step();
+
+                int s0 = match.Scores[0], s1 = match.Scores[1];
+                int aScore = aIsTeam0 ? s0 : s1;
+                int bScore = aIsTeam0 ? s1 : s0;
+                aScoreTotal += aScore;
+                bScoreTotal += bScore;
+
+                int winner = match.WinnerTeam;
+                if (winner == -1) draws++;
+                else if ((winner == 0 && aIsTeam0) || (winner == 1 && !aIsTeam0)) aWins++;
+                else bWins++;
+            }
+
+            results.Add(new H2HResult
+            {
+                MapName = mapName,
+                AWins = aWins, BWins = bWins, Draws = draws,
+                TotalGames = gamesPerMap,
+                AAvgScore = (int)(aScoreTotal / gamesPerMap),
+                BAvgScore = (int)(bScoreTotal / gamesPerMap),
+            });
+        }
+
+        return results;
+    }
+
+    public static void PrintH2HResults(string nameA, string nameB, List<H2HResult> results)
+    {
+        GD.Print("═══════════════════════════════════════════════════════════");
+        GD.Print($"  Head-to-Head: {nameA} vs {nameB}");
+        GD.Print("═══════════════════════════════════════════════════════════");
+
+        int totalAWins = 0, totalBWins = 0, totalDraws = 0;
+        foreach (var r in results)
+        {
+            totalAWins += r.AWins; totalBWins += r.BWins; totalDraws += r.Draws;
+            float aRate = r.TotalGames > 0 ? r.AWins / (float)r.TotalGames : 0;
+            string bar = new('█', (int)(aRate * 20));
+            string gap = new('░', 20 - bar.Length);
+            string winner = r.AWins > r.BWins ? $"← {nameA}" : r.BWins > r.AWins ? $"{nameB} →" : "EVEN";
+            GD.Print($"  {r.MapName,-16} {r.AWins}W-{r.BWins}L-{r.Draws}D  avg {r.AAvgScore}-{r.BAvgScore}  [{bar}{gap}]  {winner}");
+        }
+
+        int total = totalAWins + totalBWins + totalDraws;
+        GD.Print("───────────────────────────────────────────────────────────");
+        GD.Print($"  TOTAL          {totalAWins}W-{totalBWins}L-{totalDraws}D / {total} games");
+        float overallRate = total > 0 ? totalAWins / (float)total : 0;
+        GD.Print($"  {nameA} win rate: {overallRate:P0}");
+        GD.Print("═══════════════════════════════════════════════════════════");
+    }
 }

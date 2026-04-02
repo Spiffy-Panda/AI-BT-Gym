@@ -55,6 +55,15 @@ public partial class MovementTests : Node
         var matchupResults = BeaconMapTests.RunInformedVsUninformed(gamesPerMatchup: 10);
         BeaconMapTests.PrintMatchupResults(matchupResults);
 
+        // Head-to-head: Map_Tester vs Blitz_Runners across all maps
+        var mapTester = AiBtGym.Godot.BeaconTestTeam.GetEntry();
+        var blitzRunners = AiBtGym.Godot.BeaconSeedTeams.GetAllEntries().Find(t => t.Name == "Blitz_Runners");
+        if (blitzRunners != null)
+        {
+            var h2h = BeaconMapTests.RunHeadToHead(mapTester, blitzRunners, gamesPerMap: 10);
+            BeaconMapTests.PrintH2HResults("Map_Tester", "Blitz_Runners", h2h);
+        }
+
         GetTree().Quit((failed + mapFailed + bbFailed) > 0 ? 1 : 0);
     }
 

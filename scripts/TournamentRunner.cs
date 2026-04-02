@@ -305,7 +305,21 @@ public partial class TournamentRunner : Node
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             GenerationSummary summary;
 
-            if (config.GameType == TournamentGameType.BeaconBrawl && config.GetBeaconTeams != null)
+            if (tournamentId == "bb_challenge" && config.GetBeaconTeams != null)
+            {
+                var teamEntries = config.GetBeaconTeams(gen);
+                var challenger = teamEntries[0];
+                var opponents = teamEntries.GetRange(1, teamEntries.Count - 1);
+                var mapPresets = new (string, ArenaConfig?)[]
+                {
+                    ("Flat", null),
+                    ("Hazards", ArenaMaps.BeaconHazards),
+                    ("Combined", ArenaMaps.BeaconCombined),
+                };
+                summary = BeaconTournament.RunChallenge(challenger, opponents, mapPresets,
+                    generation: gen, outputPath: outPath, bestOf: 9);
+            }
+            else if (config.GameType == TournamentGameType.BeaconBrawl && config.GetBeaconTeams != null)
             {
                 var teamEntries = config.GetBeaconTeams(gen);
                 summary = BeaconTournament.RunGeneration(teamEntries, generation: gen, outputPath: outPath);

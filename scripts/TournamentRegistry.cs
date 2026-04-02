@@ -75,6 +75,29 @@ public static class TournamentRegistry
                 _    => BeaconSeedTeams.GetAllEntries()
             }
         });
+
+        // Beacon Brawl Challenge: test team vs league teams across 3 map types
+        Register(new TournamentConfig(
+            "bb_challenge", "BB Map Challenge",
+            gen => new(BeaconSeedTeams.Names, [], BeaconSeedTeams.HexColors),
+            GameType: TournamentGameType.BeaconBrawl
+        )
+        {
+            GetBeaconTeams = gen =>
+            {
+                var league = gen switch
+                {
+                    >= 4 => BB_G4.GetAllEntries(),
+                    3    => BB_G3.GetAllEntries(),
+                    2    => BB_G2.GetAllEntries(),
+                    1    => BB_G1.GetAllEntries(),
+                    _    => BeaconSeedTeams.GetAllEntries()
+                };
+                // Prepend test team — RunChallenge will use index 0 as challenger
+                league.Insert(0, BeaconTestTeam.GetEntry());
+                return league;
+            }
+        });
     }
 
     public static void Register(TournamentConfig config)

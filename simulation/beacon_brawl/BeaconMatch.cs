@@ -41,6 +41,9 @@ public class BeaconMatch
     /// <summary>Fired when a charged rifle shot resolves. Args: (segments, team).</summary>
     public Action<Vector2[], int>? OnRifleFired { get; set; }
 
+    /// <summary>Whether team spawn sides were swapped for this match.</summary>
+    public bool SpawnSwapped { get; private set; }
+
     private readonly BehaviorTreeRunner[] _btRunners;
 
     // ── Modifier mutable state ──
@@ -66,10 +69,10 @@ public class BeaconMatch
         // Spawn positions: use arena spawn positions with slight offset per pawn
         float spacing = 50f;
         var rng = seed is int s ? new Random(s) : null;
-        bool swap = rng?.Next(2) == 1;
+        SpawnSwapped = rng?.Next(2) == 1;
 
-        Vector2 spawnA = swap ? arena.SpawnPositions[1] : arena.SpawnPositions[0];
-        Vector2 spawnB = swap ? arena.SpawnPositions[0] : arena.SpawnPositions[1];
+        Vector2 spawnA = SpawnSwapped ? arena.SpawnPositions[1] : arena.SpawnPositions[0];
+        Vector2 spawnB = SpawnSwapped ? arena.SpawnPositions[0] : arena.SpawnPositions[1];
 
         TeamA = new Pawn[teamSize];
         TeamB = new Pawn[teamSize];
@@ -132,7 +135,8 @@ public class BeaconMatch
         {
             if (pawn.IsDead && pawn.RespawnTimer <= 0)
             {
-                Vector2 spawnPos = Arena.SpawnPositions[pawn.TeamIndex];
+                int spawnIdx = SpawnSwapped ? (1 - pawn.TeamIndex) : pawn.TeamIndex;
+                Vector2 spawnPos = Arena.SpawnPositions[spawnIdx];
                 pawn.Respawn(spawnPos);
                 Recorder?.RecordEvent(Tick, pawn.TeamIndex, pawn.PawnIndex, "respawn");
             }
@@ -310,7 +314,8 @@ public class BeaconMatch
             int ownedBeacons = 0;
             foreach (var b in Beacons)
                 if (b.OwnerTeam == myTeamId) ownedBeacons++;
-            bool inBase = Arena.BaseZones[pawn.TeamIndex].Contains(pawn.Position);
+            int baseIdx = SpawnSwapped ? (1 - pawn.TeamIndex) : pawn.TeamIndex;
+            bool inBase = Arena.BaseZones[baseIdx].Contains(pawn.Position);
             BeaconPhysics.ApplyRegen(pawn, ownedBeacons, inBase, BeaconPhysics.FixedDt);
         }
 

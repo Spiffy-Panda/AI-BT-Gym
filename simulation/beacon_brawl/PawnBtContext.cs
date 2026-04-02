@@ -56,6 +56,9 @@ public class PawnBtContext : IBtContext
     private Pawn? _nearestEnemy;
     private float _nearestEnemyDist;
 
+    /// <summary>Base zone index for this pawn, accounting for spawn swap.</summary>
+    private int MyBaseIndex;
+
     public PawnBtContext(Pawn pawn, List<Pawn> allies, List<Pawn> enemies,
         Beacon[] beacons, BeaconArena arena, int tick, int[] teamScores,
         int[]? rates, List<Projectile> projectiles, Pawn[] allPawns,
@@ -72,6 +75,10 @@ public class PawnBtContext : IBtContext
         _match = match;
         Projectiles = projectiles;
         AllPawns = allPawns;
+
+        // Resolve base zone index accounting for spawn swap
+        bool swapped = match?.SpawnSwapped == true;
+        MyBaseIndex = swapped ? (1 - pawn.TeamIndex) : pawn.TeamIndex;
 
         // Cache nearest living enemy
         _nearestEnemyDist = float.MaxValue;
@@ -167,8 +174,8 @@ public class PawnBtContext : IBtContext
             "in_beacon_right" => _beacons[2].Contains(_pawn.Position) ? 1f : 0f,
 
             // Am I in base zone?
-            "in_base_zone" => _arena.BaseZones[_pawn.TeamIndex].Contains(_pawn.Position) ? 1f : 0f,
-            "ally_in_base_zone" => _allies.Any(a => !a.IsDead && _arena.BaseZones[_pawn.TeamIndex].Contains(a.Position)) ? 1f : 0f,
+            "in_base_zone" => _arena.BaseZones[MyBaseIndex].Contains(_pawn.Position) ? 1f : 0f,
+            "ally_in_base_zone" => _allies.Any(a => !a.IsDead && _arena.BaseZones[MyBaseIndex].Contains(a.Position)) ? 1f : 0f,
 
             // Beacon counts
             "owned_beacon_count" => _beacons.Count(b => b.OwnerTeam == myTeam),
@@ -304,7 +311,7 @@ public class PawnBtContext : IBtContext
             "move_toward_beacon_right" => MoveToward(_beacons[2].Zone.Center),
             "move_toward_nearest_unowned" => MoveTowardNearestUnowned(),
             "move_toward_nearest_contested" => MoveTowardNearestContested(),
-            "move_toward_base" => MoveToward(_arena.BaseZones[_pawn.TeamIndex].Center),
+            "move_toward_base" => MoveToward(_arena.BaseZones[MyBaseIndex].Center),
             "move_toward_nearest_pickup" => MoveTowardNearestPickup(),
             "move_off_hazard" => MoveOffHazard(),
 
